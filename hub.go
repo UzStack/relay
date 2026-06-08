@@ -85,6 +85,25 @@ func (h *Hub) removeFromOrder(id string) {
 	}
 }
 
+// ClientInfo ulangan worker haqida ma'lumot (API uchun).
+type ClientInfo struct {
+	ID          string    `json:"client_id"`
+	IP          string    `json:"ip"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
+// Clients hozir ulangan worker'lar ro'yxatini qaytaradi.
+func (h *Hub) Clients() []ClientInfo {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]ClientInfo, 0, len(h.order))
+	for _, id := range h.order {
+		c := h.clients[id]
+		out = append(out, ClientInfo{ID: c.id, IP: c.ip, ConnectedAt: c.connectedAt})
+	}
+	return out
+}
+
 // HasActiveClient hech bo'lmaganda bitta active client borligini bildiradi.
 func (h *Hub) HasActiveClient() bool {
 	h.mu.Lock()
@@ -145,6 +164,22 @@ type outcome struct {
 	reason string
 }
 
+// outcomeName urinish natijasini tarix uchun matnga aylantiradi.
+func outcomeName(k outcomeKind) string {
+	switch k {
+	case outcomeDone:
+		return "done"
+	case outcomeFailed:
+		return "failed"
+	case outcomeDisconnect:
+		return "disconnect"
+	case outcomeTimeout:
+		return "timeout"
+	default:
+		return "unknown"
+	}
+}
+
 // Dispatch task'ni active worker'ga yuboradi; javob kelmasa/uzilsa BOSHQA worker'ga
 // MaxRetries martagacha qayta yuboradi. Bu funksiya bloklaydi — goroutine'da chaqiriladi.
 func (h *Hub) Dispatch(t *Task) {
@@ -165,17 +200,20 @@ func (h *Hub) Dispatch(t *Task) {
 		tried[c.id] = true
 
 		if !h.sendTask(c, t) {
+			h.store.AddAttempt(t.ID, Attempt{Num: attempt, ClientID: c.id, ClientIP: c.ip, Outcome: "send_failed"})
 			continue // bu worker'ga yuborib bo'lmadi, keyingisini sinaymiz
 		}
-		h.store.MarkDispatched(t.ID, c.id, attempt)
+		h.store.MarkDispatched(t.ID, c.id, c.ip, attempt)
 
 		out := h.waitOutcome(t, c.id)
 		if out.kind == outcomeDone {
+			h.store.AddAttempt(t.ID, Attempt{Num: attempt, ClientID: c.id, ClientIP: c.ip, Outcome: "done"})
 			h.store.Finalize(t.ID, StatusDone, out.data, "")
 			return
 		}
-		log.Printf("task %s urinish %d/%d (worker %s) muvaffaqiyatsiz: %s",
-			t.ID, attempt, maxAttempts, c.id, out.reason)
+		h.store.AddAttempt(t.ID, Attempt{Num: attempt, ClientID: c.id, ClientIP: c.ip, Outcome: outcomeName(out.kind), Error: out.reason})
+		log.Printf("task %s urinish %d/%d (worker %s, ip %s) muvaffaqiyatsiz: %s",
+			t.ID, attempt, maxAttempts, c.id, c.ip, out.reason)
 		// boshqa worker bilan davom etamiz
 	}
 

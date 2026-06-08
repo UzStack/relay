@@ -18,8 +18,8 @@ func TestStoreLifecycle(t *testing.T) {
 		t.Fatal("task Get orqali topilmadi")
 	}
 
-	s.MarkDispatched(task.ID, "client-1", 1)
-	if got, _ := s.Get(task.ID); got.Status != StatusDispatched || got.ClientID != "client-1" {
+	s.MarkDispatched(task.ID, "client-1", "10.0.0.5", 1)
+	if got, _ := s.Get(task.ID); got.Status != StatusDispatched || got.ClientID != "client-1" || got.ClientIP != "10.0.0.5" {
 		t.Fatalf("dispatched holati noto'g'ri: %+v", got)
 	}
 
@@ -69,8 +69,8 @@ func TestEmitDisconnectSignalsOpenTasks(t *testing.T) {
 	s := NewTaskStore()
 	a := s.Create(nil)
 	b := s.Create(nil)
-	s.MarkDispatched(a.ID, "c1", 1)
-	s.MarkDispatched(b.ID, "c2", 1)
+	s.MarkDispatched(a.ID, "c1", "1.1.1.1", 1)
+	s.MarkDispatched(b.ID, "c2", "2.2.2.2", 1)
 
 	s.EmitDisconnect("c1")
 

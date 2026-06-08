@@ -51,7 +51,34 @@ task → worker-A ga yuborildi
 
 - Birinchi kelgan javob **g'olib** (kechikkan/takroriy javoblar e'tiborsiz).
 - Hech qaysi worker ulanmagan bo'lsa → darrov `no_worker` (503).
-- `attempts` maydoni nechta worker'ga urinilganini ko'rsatadi.
+
+### Javobdagi tarix (kim, qachon, nega fail bo'ldi)
+
+Har task javobida to'liq diagnostika qaytadi:
+
+| Maydon | Ma'nosi |
+|--------|---------|
+| `client_id` | taskni **bajargan** worker UUID'si |
+| `client_ip` | shu worker IP'si |
+| `attempts` | jami necha marta urinilgani |
+| `attempt_log[]` | har urinish: `{num, client_id, client_ip, outcome, error}` |
+
+`outcome` qiymatlari: `done`, `timeout`, `failed`, `disconnect`, `send_failed`.
+
+```json
+"attempt_log": [
+  { "num": 1, "client_id": "d9c3...", "client_ip": "10.0.0.5", "outcome": "timeout", "error": "javob kelmadi (timeout)" },
+  { "num": 2, "client_id": "1766...", "client_ip": "10.0.0.6", "outcome": "done" }
+]
+```
+
+Har worker ulanganda **UUID** oladi va uning **IP'si** saqlanadi — `GET /clients`
+orqali hammasini ko'rish mumkin:
+
+```bash
+curl -H "Authorization: Bearer secret" localhost:8080/clients
+# → { "count": 2, "clients": [ {"client_id":"...","ip":"10.0.0.5","connected_at":"..."}, ... ] }
+```
 
 Barcha HTTP so'rovlar `Authorization: Bearer <AUTH_TOKEN>` talab qiladi
 (WS uchun `?token=` ham bo'ladi).
@@ -63,7 +90,8 @@ Barcha HTTP so'rovlar `Authorization: Bearer <AUTH_TOKEN>` talab qiladi
 | GET | `/ws?token=` | Worker WebSocket ulanishi |
 | POST | `/tasks` | Task yuborish (async) |
 | POST | `/tasks?wait=true` | Task yuborish (sync — javob kelguncha kutadi) |
-| GET | `/tasks/{id}` | Task status va javobini olish |
+| GET | `/tasks/{id}` | Task status, javob va urinishlar tarixini olish |
+| GET | `/clients` | Ulangan worker'lar ro'yxati (id, ip, vaqt) |
 | GET | `/healthz` | Active client / task statistikasi |
 
 ### Async namuna

@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -36,6 +38,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /ws", s.handleWS)
 	mux.HandleFunc("POST /tasks", s.auth(s.handleCreateTask))
 	mux.HandleFunc("GET /tasks/{id}", s.auth(s.handleGetTask))
+	mux.HandleFunc("GET /clients", s.auth(s.handleClients))
 	mux.HandleFunc("GET /healthz", s.auth(s.handleHealth))
 	return mux
 }
@@ -67,11 +70,13 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
 		return
 	}
+	ip := clientIP(r)
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return // Upgrade o'zi javob yozadi
 	}
-	client := NewClient(uuid.NewString(), s.hub, conn)
+	client := NewClient(uuid.NewString(), ip, s.hub, conn)
+	log.Printf("worker ulanmoqda: id=%s ip=%s", client.id, ip)
 	s.hub.register <- client
 	go client.writePump()
 	go client.readPump()
@@ -137,14 +142,38 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
+// handleClients ulangan worker'lar ro'yxatini (id, ip, ulangan vaqt) qaytaradi.
+func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
+	clients := s.hub.Clients()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":   len(clients),
+		"clients": clients,
+	})
+}
+
 // handleHealth active client va task statistikasini qaytaradi.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	total, byStatus := s.store.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"active_clients": s.hub.ActiveCount(),
-		"tasks_total":    total,
+		"active_clients":  s.hub.ActiveCount(),
+		"tasks_total":     total,
 		"tasks_by_status": byStatus,
 	})
+}
+
+// clientIP so'rovning haqiqiy IP manzilini aniqlaydi (proxy header'larini hisobga olib).
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	}
+	if xr := r.Header.Get("X-Real-IP"); xr != "" {
+		return strings.TrimSpace(xr)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

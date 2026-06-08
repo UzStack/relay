@@ -17,18 +17,22 @@ const (
 
 // Client bitta ulangan worker'ni ifodalaydi.
 type Client struct {
-	id   string
-	hub  *Hub
-	conn *websocket.Conn
-	send chan []byte
+	id          string
+	ip          string // ulanish IP manzili
+	connectedAt time.Time
+	hub         *Hub
+	conn        *websocket.Conn
+	send        chan []byte
 }
 
-func NewClient(id string, hub *Hub, conn *websocket.Conn) *Client {
+func NewClient(id, ip string, hub *Hub, conn *websocket.Conn) *Client {
 	return &Client{
-		id:   id,
-		hub:  hub,
-		conn: conn,
-		send: make(chan []byte, sendBuffer),
+		id:          id,
+		ip:          ip,
+		connectedAt: time.Now(),
+		hub:         hub,
+		conn:        conn,
+		send:        make(chan []byte, sendBuffer),
 	}
 }
 

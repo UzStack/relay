@@ -27,17 +27,28 @@ type taskEvent struct {
 	disconnect bool            // client uzilib qoldi
 }
 
+// Attempt — bitta worker'ga urinishning natijasi (tarix uchun).
+type Attempt struct {
+	Num      int    `json:"num"`              // urinish raqami (1, 2, ...)
+	ClientID string `json:"client_id"`        // qaysi worker
+	ClientIP string `json:"client_ip"`        // worker IP'si
+	Outcome  string `json:"outcome"`          // done / timeout / failed / disconnect / send_failed
+	Error    string `json:"error,omitempty"`  // muvaffaqiyatsizlik sababi
+}
+
 // Task bitta so'rovni ifodalaydi.
 type Task struct {
-	ID        string          `json:"task_id"`
-	Status    string          `json:"status"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	ClientID  string          `json:"client_id,omitempty"`
-	Attempts  int             `json:"attempts"` // nechta worker'ga urinilgani
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID         string          `json:"task_id"`
+	Status     string          `json:"status"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
+	Result     json.RawMessage `json:"result,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	ClientID   string          `json:"client_id,omitempty"` // taskni bajargan (yoki joriy) worker
+	ClientIP   string          `json:"client_ip,omitempty"` // shu worker IP'si
+	Attempts   int             `json:"attempts"`            // nechta worker'ga urinilgani
+	AttemptLog []Attempt       `json:"attempt_log,omitempty"` // har urinish tarixi
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 
 	done   chan struct{}  // sync waiter'lar (?wait=true) uchun; YAKUNIY holatda close qilinadi
 	events chan taskEvent // dispatcher uchun ichki signal kanali
@@ -85,14 +96,25 @@ func isTerminal(status string) bool {
 }
 
 // MarkDispatched task'ni navbatdagi worker'ga yuborilgan deb belgilaydi (har urinishda).
-func (s *TaskStore) MarkDispatched(id, clientID string, attempt int) {
+func (s *TaskStore) MarkDispatched(id, clientID, clientIP string, attempt int) {
 	s.mu.Lock()
 	t, ok := s.tasks[id]
 	if ok && !isTerminal(t.Status) {
 		t.Status = StatusDispatched
 		t.ClientID = clientID
+		t.ClientIP = clientIP
 		t.Attempts = attempt
 		t.UpdatedAt = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+// AddAttempt urinish natijasini task tarixiga qo'shadi.
+func (s *TaskStore) AddAttempt(id string, a Attempt) {
+	s.mu.Lock()
+	if t, ok := s.tasks[id]; ok && !isTerminal(t.Status) {
+		t.AttemptLog = append(t.AttemptLog, a)
+		t.Attempts = len(t.AttemptLog)
 	}
 	s.mu.Unlock()
 }
