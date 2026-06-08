@@ -62,7 +62,7 @@ func (c *Client) readPump() {
 			continue
 		}
 		if msg.Type == "result" {
-			c.hub.handleResult(msg)
+			c.hub.handleResult(msg, c.id)
 		}
 	}
 }

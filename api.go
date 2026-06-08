@@ -93,15 +93,19 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := s.store.Create(req.Payload)
-	dispatched := s.hub.Dispatch(task)
-	if !dispatched {
-		// active client yo'q (yoki band) → no_worker
+
+	// Umuman active worker yo'q bo'lsa darrov no_worker (503).
+	if !s.hub.HasActiveClient() {
+		s.store.Finalize(task.ID, StatusNoWorker, nil, "active client yo'q")
 		t, _ := s.store.Get(task.ID)
 		writeJSON(w, http.StatusServiceUnavailable, t)
 		return
 	}
 
-	// Sync rejim: ?wait=true bo'lsa javob kelguncha kutamiz.
+	// Dispatch fonda ishlaydi: timeout/uzilishda boshqa worker'ga retry qiladi.
+	go s.hub.Dispatch(task)
+
+	// Sync rejim: ?wait=true bo'lsa yakuniy javobni (barcha retry'lardan keyin) kutamiz.
 	if r.URL.Query().Get("wait") == "true" {
 		if ok := s.store.Wait(task, s.cfg.WaitTimeout); !ok {
 			t, _ := s.store.Get(task.ID)
@@ -109,7 +113,11 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t, _ := s.store.Get(task.ID)
-		writeJSON(w, http.StatusOK, t)
+		status := http.StatusOK
+		if t.Status != StatusDone {
+			status = http.StatusBadGateway // failed/no_worker
+		}
+		writeJSON(w, status, t)
 		return
 	}
 

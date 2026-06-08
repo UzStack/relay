@@ -9,8 +9,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -125,24 +129,81 @@ func process(t taskMessage) resultMessage {
 	return resultMessage{Type: "result", TaskID: t.TaskID, Status: "done", Data: data}
 }
 
-// handle — ASOSIY BIZNES MANTIQ shu yerga yoziladi.
-// Hozircha namuna sifatida payload'ni echo qiladi.
+// httpClient barcha forward so'rovlar uchun (timeout bilan).
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// httpTask — payload formati: worker qaysi API'ga, qanday so'rov yuborishini bildiradi.
+type httpTask struct {
+	Method  string            `json:"method"`  // GET, POST, ... (bo'sh bo'lsa GET)
+	URL     string            `json:"url"`     // target API manzili (majburiy)
+	Headers map[string]string `json:"headers"` // qo'shimcha header'lar (ixtiyoriy)
+	Body    json.RawMessage   `json:"body"`    // yuboriladigan body (ixtiyoriy, JSON)
+}
+
+// httpResult — so'rovchiga qaytadigan natija.
+type httpResult struct {
+	StatusCode int             `json:"status_code"`
+	Body       json.RawMessage `json:"body"`
+}
+
+// handle — payload'da ko'rsatilgan target API'ga HTTP so'rov yuboradi va javobni qaytaradi.
 func handle(taskID string, payload json.RawMessage) (json.RawMessage, error) {
-	log.Printf("task qabul qilindi: %s payload=%s", taskID, string(payload))
-	// ... bu yerda haqiqiy ishni bajaring (HTTP so'rov, hisoblash va h.k.) ...
-	out, _ := json.Marshal(map[string]any{
-		"echo":        payloadOrNull(payload),
-		"handled_by":  "worker",
-		"received_at": time.Now().Format(time.RFC3339),
+	var task httpTask
+	if err := json.Unmarshal(payload, &task); err != nil {
+		return nil, fmt.Errorf("payload noto'g'ri: %w", err)
+	}
+	if task.URL == "" {
+		return nil, fmt.Errorf("payload.url majburiy")
+	}
+	method := task.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+
+	var body io.Reader
+	if len(task.Body) > 0 {
+		body = bytes.NewReader(task.Body)
+	}
+	req, err := http.NewRequest(method, task.URL, body)
+	if err != nil {
+		return nil, fmt.Errorf("so'rov yaratish: %w", err)
+	}
+	for k, v := range task.Headers {
+		req.Header.Set(k, v)
+	}
+	if len(task.Body) > 0 && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	log.Printf("task %s → %s %s", taskID, method, task.URL)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("target API xatosi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("javobni o'qish: %w", err)
+	}
+
+	out, _ := json.Marshal(httpResult{
+		StatusCode: resp.StatusCode,
+		Body:       asJSON(raw),
 	})
 	return out, nil
 }
 
-func payloadOrNull(p json.RawMessage) json.RawMessage {
-	if len(p) == 0 {
+// asJSON javob body'sini JSON bo'lsa o'sha holicha, aks holda string sifatida qaytaradi.
+func asJSON(b []byte) json.RawMessage {
+	if len(b) == 0 {
 		return json.RawMessage("null")
 	}
-	return p
+	if json.Valid(b) {
+		return json.RawMessage(b)
+	}
+	quoted, _ := json.Marshal(string(b))
+	return quoted
 }
 
 func getenv(key, def string) string {

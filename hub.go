@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 )
 
 // outMessage — server'dan client'ga yuboriladigan task xabari.
@@ -68,8 +69,8 @@ func (h *Hub) Run() {
 			n := len(h.clients)
 			h.mu.Unlock()
 			log.Printf("client uzildi: %s (jami active: %d)", c.id, n)
-			// shu client'ning ochiq task'larini fail qilamiz
-			h.store.FailTasksForClient(c.id)
+			// Ochiq task'larga disconnect signali — dispatcher boshqa worker'ga retry qiladi.
+			h.store.EmitDisconnect(c.id)
 		}
 	}
 }
@@ -84,17 +85,11 @@ func (h *Hub) removeFromOrder(id string) {
 	}
 }
 
-// nextClient round-robin bo'yicha keyingi active client'ni qaytaradi (yo'q bo'lsa nil).
-func (h *Hub) nextClient() *Client {
+// HasActiveClient hech bo'lmaganda bitta active client borligini bildiradi.
+func (h *Hub) HasActiveClient() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(h.order) == 0 {
-		return nil
-	}
-	h.rrIndex = h.rrIndex % len(h.order)
-	id := h.order[h.rrIndex]
-	h.rrIndex++
-	return h.clients[id]
+	return len(h.clients) > 0
 }
 
 // ActiveCount active client sonini qaytaradi.
@@ -104,43 +99,123 @@ func (h *Hub) ActiveCount() int {
 	return len(h.clients)
 }
 
-// Dispatch task'ni round-robin tanlangan client'ga yuboradi.
-// Active client yo'q bo'lsa task'ni no_worker deb belgilaydi va false qaytaradi.
-func (h *Hub) Dispatch(t *Task) bool {
-	c := h.nextClient()
-	if c == nil {
-		h.store.Complete(t.ID, StatusNoWorker, nil, "active client yo'q")
-		return false
+// nextClientExcluding round-robin bo'yicha keyingi, hali urinilmagan active client'ni qaytaradi.
+func (h *Hub) nextClientExcluding(tried map[string]bool) *Client {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := len(h.order)
+	for i := 0; i < n; i++ {
+		h.rrIndex = h.rrIndex % len(h.order)
+		id := h.order[h.rrIndex]
+		h.rrIndex++
+		if !tried[id] {
+			return h.clients[id]
+		}
 	}
-	msg := outMessage{Type: "task", TaskID: t.ID, Payload: t.Payload}
-	data, err := json.Marshal(msg)
+	return nil
+}
+
+// sendTask task'ni client'ning send buffer'iga yozadi (bloklamaydi).
+func (h *Hub) sendTask(c *Client, t *Task) bool {
+	data, err := json.Marshal(outMessage{Type: "task", TaskID: t.ID, Payload: t.Payload})
 	if err != nil {
-		h.store.Complete(t.ID, StatusFailed, nil, "marshal xatosi: "+err.Error())
 		return false
 	}
-	// send channel to'lib qolsa yoki yopiq bo'lsa, client sog'lom emas deb hisoblaymiz.
 	select {
 	case c.send <- data:
-		h.store.MarkDispatched(t.ID, c.id)
 		return true
 	default:
-		h.store.Complete(t.ID, StatusNoWorker, nil, "client band (send buffer to'la)")
-		return false
+		return false // client band / send buffer to'la
 	}
 }
 
-// handleResult client'dan kelgan natija xabarini qayta ishlaydi.
-func (h *Hub) handleResult(msg inMessage) {
-	switch msg.Status {
-	case StatusDone:
-		h.store.Complete(msg.TaskID, StatusDone, msg.Data, "")
-	case StatusFailed:
-		errMsg := msg.Error
-		if errMsg == "" {
-			errMsg = "client xatosi"
+// urinish natijasi turlari.
+type outcomeKind int
+
+const (
+	outcomeDone outcomeKind = iota
+	outcomeFailed
+	outcomeDisconnect
+	outcomeTimeout
+)
+
+type outcome struct {
+	kind   outcomeKind
+	data   json.RawMessage
+	reason string
+}
+
+// Dispatch task'ni active worker'ga yuboradi; javob kelmasa/uzilsa BOSHQA worker'ga
+// MaxRetries martagacha qayta yuboradi. Bu funksiya bloklaydi — goroutine'da chaqiriladi.
+func (h *Hub) Dispatch(t *Task) {
+	tried := make(map[string]bool)
+	maxAttempts := h.cfg.MaxRetries + 1
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		c := h.nextClientExcluding(tried)
+		if c == nil {
+			// urinib ko'rilmagan worker qolmadi
+			if attempt == 1 {
+				h.store.Finalize(t.ID, StatusNoWorker, nil, "active client yo'q")
+			} else {
+				h.store.Finalize(t.ID, StatusFailed, nil, "barcha worker'lar urinib ko'rildi")
+			}
+			return
 		}
-		h.store.Complete(msg.TaskID, StatusFailed, nil, errMsg)
-	default:
-		log.Printf("noma'lum status client natijasida: %q (task %s)", msg.Status, msg.TaskID)
+		tried[c.id] = true
+
+		if !h.sendTask(c, t) {
+			continue // bu worker'ga yuborib bo'lmadi, keyingisini sinaymiz
+		}
+		h.store.MarkDispatched(t.ID, c.id, attempt)
+
+		out := h.waitOutcome(t, c.id)
+		if out.kind == outcomeDone {
+			h.store.Finalize(t.ID, StatusDone, out.data, "")
+			return
+		}
+		log.Printf("task %s urinish %d/%d (worker %s) muvaffaqiyatsiz: %s",
+			t.ID, attempt, maxAttempts, c.id, out.reason)
+		// boshqa worker bilan davom etamiz
 	}
+
+	h.store.Finalize(t.ID, StatusFailed, nil, "javob kelmadi (timeout/retry tugadi)")
+}
+
+// waitOutcome joriy urinish uchun worker javobini, uzilishni yoki timeout'ni kutadi.
+func (h *Hub) waitOutcome(t *Task, clientID string) outcome {
+	timer := time.NewTimer(h.cfg.TaskTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case ev := <-t.events:
+			if ev.clientID != clientID {
+				continue // eski/boshqa urinishdan kelgan signal — e'tiborsiz
+			}
+			switch {
+			case ev.disconnect:
+				return outcome{kind: outcomeDisconnect, reason: "worker uzildi"}
+			case ev.status == StatusDone:
+				return outcome{kind: outcomeDone, data: ev.data}
+			default:
+				reason := ev.errMsg
+				if reason == "" {
+					reason = "worker xato qaytardi"
+				}
+				return outcome{kind: outcomeFailed, reason: reason}
+			}
+		case <-timer.C:
+			return outcome{kind: outcomeTimeout, reason: "javob kelmadi (timeout)"}
+		}
+	}
+}
+
+// handleResult client'dan kelgan natijani dispatcher'ga signal qilib uzatadi.
+func (h *Hub) handleResult(msg inMessage, clientID string) {
+	h.store.emit(msg.TaskID, taskEvent{
+		clientID: clientID,
+		status:   msg.Status,
+		data:     msg.Data,
+		errMsg:   msg.Error,
+	})
 }

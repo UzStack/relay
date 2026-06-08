@@ -13,9 +13,19 @@ const (
 	StatusPending    = "pending"    // yaratildi, hali yuborilmadi
 	StatusDispatched = "dispatched" // client'ga yuborildi, javob kutilmoqda
 	StatusDone       = "done"       // client muvaffaqiyatli javob qaytardi
-	StatusFailed     = "failed"     // xatolik (client xatosi yoki uzilish)
+	StatusFailed     = "failed"     // xatolik (barcha urinishlar muvaffaqiyatsiz)
 	StatusNoWorker   = "no_worker"  // active client topilmadi
 )
+
+// taskEvent — dispatcher goroutine'ga yuboriladigan signal (worker javobi yoki uzilishi).
+// Dispatcher shu signallarga qarab task'ni yakunlaydi yoki boshqa worker'ga retry qiladi.
+type taskEvent struct {
+	clientID   string          // qaysi client'dan kelgani (eski urinishlarni filtrlash uchun)
+	status     string          // StatusDone / StatusFailed (worker bergan)
+	data       json.RawMessage // muvaffaqiyatli natija
+	errMsg     string          // worker xatosi
+	disconnect bool            // client uzilib qoldi
+}
 
 // Task bitta so'rovni ifodalaydi.
 type Task struct {
@@ -25,10 +35,12 @@ type Task struct {
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     string          `json:"error,omitempty"`
 	ClientID  string          `json:"client_id,omitempty"`
+	Attempts  int             `json:"attempts"` // nechta worker'ga urinilgani
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 
-	done chan struct{} // sync waiter'lar (?wait=true) uchun; tugaganda close qilinadi
+	done   chan struct{}  // sync waiter'lar (?wait=true) uchun; YAKUNIY holatda close qilinadi
+	events chan taskEvent // dispatcher uchun ichki signal kanali
 }
 
 // TaskStore — in-memory task reyestri (goroutine-safe).
@@ -51,6 +63,7 @@ func (s *TaskStore) Create(payload json.RawMessage) *Task {
 		CreatedAt: now,
 		UpdatedAt: now,
 		done:      make(chan struct{}),
+		events:    make(chan taskEvent, 8),
 	}
 	s.mu.Lock()
 	s.tasks[t.ID] = t
@@ -66,70 +79,58 @@ func (s *TaskStore) Get(id string) (*Task, bool) {
 	return t, ok
 }
 
-// setStatus task statusini yangilaydi (terminal bo'lsa waiter'larni uyg'otadi).
-func (s *TaskStore) setStatus(id, status, clientID string, result json.RawMessage, errMsg string) {
+// isTerminal status yakuniymi (boshqa o'zgartirib bo'lmaydi).
+func isTerminal(status string) bool {
+	return status == StatusDone || status == StatusFailed || status == StatusNoWorker
+}
+
+// MarkDispatched task'ni navbatdagi worker'ga yuborilgan deb belgilaydi (har urinishda).
+func (s *TaskStore) MarkDispatched(id, clientID string, attempt int) {
 	s.mu.Lock()
 	t, ok := s.tasks[id]
-	if !ok {
+	if ok && !isTerminal(t.Status) {
+		t.Status = StatusDispatched
+		t.ClientID = clientID
+		t.Attempts = attempt
+		t.UpdatedAt = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+// Finalize task'ni YAKUNIY holatga keltiradi (faqat dispatcher chaqiradi).
+// Birinchi finalize g'olib — keyingilari e'tiborsiz qoladi.
+func (s *TaskStore) Finalize(id, status string, result json.RawMessage, errMsg string) {
+	s.mu.Lock()
+	t, ok := s.tasks[id]
+	if !ok || isTerminal(t.Status) {
 		s.mu.Unlock()
 		return
 	}
 	t.Status = status
+	t.Result = result
+	t.Error = errMsg
 	t.UpdatedAt = time.Now()
-	if clientID != "" {
-		t.ClientID = clientID
-	}
-	if result != nil {
-		t.Result = result
-	}
-	if errMsg != "" {
-		t.Error = errMsg
-	}
-	isTerminal := status == StatusDone || status == StatusFailed || status == StatusNoWorker
 	s.mu.Unlock()
 
-	if isTerminal {
-		s.closeDone(t)
-	}
+	close(t.done) // sync waiter'larni uyg'otamiz
 }
 
-// closeDone done channel'ni faqat bir marta yopadi.
-func (s *TaskStore) closeDone(t *Task) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// emit task'ga signal yuboradi (handleResult va disconnect chaqiradi). Bloklamaydi.
+func (s *TaskStore) emit(id string, ev taskEvent) {
+	s.mu.RLock()
+	t, ok := s.tasks[id]
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
 	select {
-	case <-t.done:
-		// allaqachon yopilgan
-	default:
-		close(t.done)
+	case t.events <- ev:
+	default: // buffer to'la — dispatcher baribir timeout bilan davom etadi
 	}
 }
 
-// MarkDispatched task'ni client'ga yuborilgan deb belgilaydi.
-func (s *TaskStore) MarkDispatched(id, clientID string) {
-	s.setStatus(id, StatusDispatched, clientID, nil, "")
-}
-
-// Complete client javobi bilan task'ni yakunlaydi.
-func (s *TaskStore) Complete(id, status string, result json.RawMessage, errMsg string) {
-	s.setStatus(id, status, "", result, errMsg)
-}
-
-// Wait sync requester uchun task tugashini (yoki timeout) kutadi.
-// Tugasa true, timeout bo'lsa false qaytaradi.
-func (s *TaskStore) Wait(t *Task, timeout time.Duration) bool {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-t.done:
-		return true
-	case <-timer.C:
-		return false
-	}
-}
-
-// FailTasksForClient client uzilganda uning ochiq task'larini fail qiladi.
-func (s *TaskStore) FailTasksForClient(clientID string) {
+// EmitDisconnect uzilgan client'ning ochiq task'lariga disconnect signali yuboradi.
+func (s *TaskStore) EmitDisconnect(clientID string) {
 	s.mu.RLock()
 	var ids []string
 	for id, t := range s.tasks {
@@ -139,7 +140,19 @@ func (s *TaskStore) FailTasksForClient(clientID string) {
 	}
 	s.mu.RUnlock()
 	for _, id := range ids {
-		s.Complete(id, StatusFailed, nil, "worker_disconnected")
+		s.emit(id, taskEvent{clientID: clientID, disconnect: true})
+	}
+}
+
+// Wait sync requester uchun task YAKUNLANISHINI (yoki timeout) kutadi.
+func (s *TaskStore) Wait(t *Task, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-t.done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 

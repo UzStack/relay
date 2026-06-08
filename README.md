@@ -14,7 +14,7 @@ so'rovlarni real-time ulangan worker client'larga yuboradi va javobni qaytaradi.
 - Task kelsa, **round-robin** bilan active worker tanlanadi va yuboriladi.
 - Har task'ga `task_id` beriladi; status va javob `GET /tasks/{id}` orqali olinadi.
 - Har **2 soniyada** WS ping yuboriladi; pong kelmasa worker inactive bo'ladi va
-  uning ochiq task'lari `failed: worker_disconnected` bo'ladi.
+  uning ochiq task'lari boshqa worker'ga qayta yuboriladi (pastdagi *Fallback*).
 
 ## Ishga tushirish
 
@@ -23,8 +23,35 @@ AUTH_TOKEN=secret go run .
 # :8080 da tinglaydi
 ```
 
-Sozlamalar (env): `PORT`, `AUTH_TOKEN` (majburiy), `PING_INTERVAL` (2s),
-`PONG_WAIT` (6s), `WAIT_TIMEOUT` (30s).
+Sozlamalar (env):
+
+| Var | Default | Tavsif |
+|-----|---------|--------|
+| `PORT` | `8080` | HTTP/WS port |
+| `AUTH_TOKEN` | — (majburiy) | Statik bearer token |
+| `PING_INTERVAL` | `2s` | Heartbeat ping oralig'i |
+| `PONG_WAIT` | `6s` | Pong kutish (read deadline) |
+| `TASK_TIMEOUT` | `10s` | Bitta urinish: worker javobini kutish, so'ng retry |
+| `MAX_RETRIES` | `2` | Javob kelmasa nechta BOSHQA worker'ga qayta yuborish |
+| `WAIT_TIMEOUT` | `35s` | `?wait=true` uchun maksimal HTTP kutish |
+
+## Fallback qanday ishlaydi
+
+Har task uchun server ichida alohida **dispatcher** ishlaydi:
+
+```
+task → worker-A ga yuborildi
+       ├─ TASK_TIMEOUT ichida javob keldi? → done ✅
+       ├─ worker xato qaytardi?            → boshqa worker'ga retry
+       ├─ worker uzilib qoldi?             → boshqa worker'ga retry
+       └─ javob umuman kelmadi (timeout)?  → boshqa worker'ga retry
+              ... MAX_RETRIES martagacha, har safar BOSHQA (urinilmagan) worker'ga ...
+                     └─ hammasi uddasidan chiqmasa → failed
+```
+
+- Birinchi kelgan javob **g'olib** (kechikkan/takroriy javoblar e'tiborsiz).
+- Hech qaysi worker ulanmagan bo'lsa → darrov `no_worker` (503).
+- `attempts` maydoni nechta worker'ga urinilganini ko'rsatadi.
 
 Barcha HTTP so'rovlar `Authorization: Bearer <AUTH_TOKEN>` talab qiladi
 (WS uchun `?token=` ham bo'ladi).
@@ -78,18 +105,39 @@ javob beradi.
 MESH_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
 ```
 
-Biznes mantiqni `cmd/worker/main.go` ichidagi `handle()` funksiyasiga yozing —
-u `task_id` va `payload` oladi, natija JSON yoki xato qaytaradi. Hozircha namuna
-sifatida payload'ni echo qiladi:
+Worker `handle()` (`cmd/worker/main.go`) payload'ni **target API'ga so'rov
+ko'rsatmasi** deb o'qiydi va o'sha API'ga HTTP so'rov yuborib, javobni qaytaradi.
 
-```go
-func handle(taskID string, payload json.RawMessage) (json.RawMessage, error) {
-	// ... haqiqiy ishni bajaring (HTTP so'rov, hisoblash va h.k.) ...
-	return json.Marshal(map[string]any{"echo": payloadOrNull(payload)})
+Payload formati:
+
+```json
+{
+  "method":  "POST",                       // GET, POST... (bo'sh = GET)
+  "url":     "https://example.com/api/",   // target API (majburiy)
+  "headers": { "X-Api-Key": "..." },       // ixtiyoriy
+  "body":    { "summa": 1000 }             // yuboriladigan data (ixtiyoriy)
 }
 ```
 
+Worker qaytaradigan natija: `{ "status_code": 200, "body": {...} }` — target API
+javobi. Boshqacha mantiq kerak bo'lsa (HTTP emas, hisoblash va h.k.) — `handle()`
+funksiyasini o'zgartiring.
+
 Worker env: `MESH_URL` (default `ws://localhost:8080/ws`), `TOKEN` (majburiy).
+
+### Misol — boshqa API'ga data yuborish
+
+```bash
+curl -H "Authorization: Bearer secret" \
+  -d '{
+    "payload": {
+      "method": "POST",
+      "url": "https://example.com/api/",
+      "body": { "summa": 1000, "user_id": 42 }
+    }
+  }' \
+  "localhost:8080/tasks?wait=true"
+```
 
 ## Test
 

@@ -20,6 +20,8 @@ func startTestServer(t *testing.T) (*httptest.Server, *Hub) {
 		PingInterval: 50 * time.Millisecond,
 		PongWait:     200 * time.Millisecond,
 		WaitTimeout:  2 * time.Second,
+		TaskTimeout:  500 * time.Millisecond,
+		MaxRetries:   2,
 	}
 	store := NewTaskStore()
 	hub := NewHub(cfg, store)
@@ -80,6 +82,40 @@ func TestE2E_SyncTask(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&task)
 	if task.Status != StatusDone || string(task.Result) != `{"echo":true}` {
 		t.Fatalf("noto'g'ri natija: %+v", task)
+	}
+}
+
+func TestE2E_TaskTimeoutThenFail(t *testing.T) {
+	ts, hub := startTestServer(t)
+	conn := dialWorker(t, ts)
+	waitFor(t, func() bool { return hub.ActiveCount() == 1 })
+
+	// worker task'ni o'qiydi-yu, javob qaytarmaydi → har urinishda timeout → failed
+	go func() {
+		var msg inMessage
+		for {
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+		}
+	}()
+
+	body := bytes.NewBufferString(`{"payload":{"x":1}}`)
+	req, _ := http.NewRequest("POST", ts.URL+"/tasks?wait=true", body)
+	req.Header.Set("Authorization", "Bearer secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("kutilgan 502 (failed), olindi %d", resp.StatusCode)
+	}
+	var task Task
+	json.NewDecoder(resp.Body).Decode(&task)
+	if task.Status != StatusFailed {
+		t.Fatalf("kutilgan failed, olindi %s", task.Status)
 	}
 }
 
