@@ -1,0 +1,9 @@
+# Compiled binary (module nomi bilan bir xil)
+/mesh
+
+# Test/coverage artefaktlari
+*.out
+*.test
+
+# Muhit fayllari
+.env
