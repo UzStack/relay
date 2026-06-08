@@ -68,47 +68,28 @@ Worker → server:
 { "type": "result", "task_id": "uuid", "status": "failed", "error": "..." }
 ```
 
-## Namuna worker (Go)
+## Worker client
+
+Tayyor worker client `cmd/worker/` ichida. Ulanish uzilsa avtomatik qayta
+ulanadi (exponential backoff), task'larni parallel bajaradi va heartbeat'ga
+javob beradi.
+
+```bash
+MESH_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
+```
+
+Biznes mantiqni `cmd/worker/main.go` ichidagi `handle()` funksiyasiga yozing —
+u `task_id` va `payload` oladi, natija JSON yoki xato qaytaradi. Hozircha namuna
+sifatida payload'ni echo qiladi:
 
 ```go
-package main
-
-import (
-	"encoding/json"
-	"log"
-
-	"github.com/gorilla/websocket"
-)
-
-func main() {
-	c, _, err := websocket.DefaultDialer.Dial("ws://localhost:8080/ws?token=secret", nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c.Close()
-
-	for {
-		var msg struct {
-			Type    string          `json:"type"`
-			TaskID  string          `json:"task_id"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		if err := c.ReadJSON(&msg); err != nil {
-			log.Fatal(err)
-		}
-		if msg.Type != "task" {
-			continue
-		}
-		// ... task'ni bajarish ...
-		c.WriteJSON(map[string]any{
-			"type":    "result",
-			"task_id": msg.TaskID,
-			"status":  "done",
-			"data":    map[string]any{"echo": json.RawMessage(msg.Payload)},
-		})
-	}
+func handle(taskID string, payload json.RawMessage) (json.RawMessage, error) {
+	// ... haqiqiy ishni bajaring (HTTP so'rov, hisoblash va h.k.) ...
+	return json.Marshal(map[string]any{"echo": payloadOrNull(payload)})
 }
 ```
+
+Worker env: `MESH_URL` (default `ws://localhost:8080/ws`), `TOKEN` (majburiy).
 
 ## Test
 

@@ -88,7 +88,10 @@ func TestE2E_NoWorker(t *testing.T) {
 	body := bytes.NewBufferString(`{"payload":1}`)
 	req, _ := http.NewRequest("POST", ts.URL+"/tasks", body)
 	req.Header.Set("Authorization", "Bearer secret")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("kutilgan 503, olindi %d", resp.StatusCode)
@@ -97,7 +100,10 @@ func TestE2E_NoWorker(t *testing.T) {
 
 func TestE2E_Unauthorized(t *testing.T) {
 	ts, _ := startTestServer(t)
-	resp, _ := http.Get(ts.URL + "/healthz")
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("kutilgan 401, olindi %d", resp.StatusCode)
