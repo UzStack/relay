@@ -10,7 +10,7 @@ var version = "dev"
 
 func main() {
 	cfg := LoadConfig()
-	log.Printf("mesh versiya: %s", version)
+	log.Printf("relay versiya: %s", version)
 
 	store := NewTaskStore()
 	hub := NewHub(cfg, store)
@@ -19,7 +19,7 @@ func main() {
 	srv := NewServer(cfg, hub, store)
 
 	addr := ":" + cfg.Port
-	log.Printf("mesh ishga tushdi: %s (ping interval: %s)", addr, cfg.PingInterval)
+	log.Printf("relay ishga tushdi: %s (ping interval: %s)", addr, cfg.PingInterval)
 	if err := http.ListenAndServe(addr, srv.Routes()); err != nil {
 		log.Fatalf("server xatosi: %v", err)
 	}

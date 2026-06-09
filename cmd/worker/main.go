@@ -1,8 +1,8 @@
-// Command worker — mesh server'iga ulanadigan namuna worker client.
+// Command worker — relay server'iga ulanadigan namuna worker client.
 //
 // Ishga tushirish:
 //
-//	MESH_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
+//	RELAY_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
 //
 // Worker server'dan task oladi, handle() funksiyasi orqali bajaradi va
 // natijani qaytaradi. Ulanish uzilsa avtomatik qayta ulanadi (backoff bilan).
@@ -48,8 +48,9 @@ const (
 var version = "dev"
 
 func main() {
-	log.Printf("mesh-worker versiya: %s", version)
-	url := getenv("MESH_URL", "ws://localhost:8080/ws")
+	log.Printf("relay-worker versiya: %s", version)
+	// RELAY_URL — yangi nom; MESH_URL eski moslik uchun qabul qilinadi.
+	url := getenv("RELAY_URL", getenv("MESH_URL", "ws://localhost:8080/ws"))
 	token := os.Getenv("TOKEN")
 	if token == "" {
 		log.Fatal("TOKEN env o'rnatilishi shart")
@@ -98,7 +99,7 @@ func run(url string) error {
 	}
 	c := &conn{ws: ws}
 	defer ws.Close()
-	log.Printf("mesh'ga ulandi: %s", url)
+	log.Printf("relay'ga ulandi: %s", url)
 
 	// Server ping yuboradi; har ping'da read deadline'ni uzaytiramiz va pong qaytaramiz.
 	ws.SetReadDeadline(time.Now().Add(pongWait))

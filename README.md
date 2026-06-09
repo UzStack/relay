@@ -1,4 +1,4 @@
-# Mesh
+# Relay
 
 WebSocket orqali task tarqatuvchi **fallback** xizmat. Tashqi API'lardan kelgan
 so'rovlarni real-time ulangan worker client'larga yuboradi va javobni qaytaradi.
@@ -6,8 +6,8 @@ so'rovlarni real-time ulangan worker client'larga yuboradi va javobni qaytaradi.
 ## Qanday ishlaydi
 
 ```
-   tashqi API ──POST /tasks──▶  mesh  ──WS task──▶  worker client
-   tashqi API ◀──javob/task_id── mesh ◀──WS result── worker client
+   tashqi API ──POST /tasks──▶  relay  ──WS task──▶  worker client
+   tashqi API ◀──javob/task_id── relay ◀──WS result── worker client
 ```
 
 - Worker'lar `GET /ws` orqali ulanadi va active deb belgilanadi.
@@ -130,7 +130,7 @@ ulanadi (exponential backoff), task'larni parallel bajaradi va heartbeat'ga
 javob beradi.
 
 ```bash
-MESH_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
+RELAY_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
 ```
 
 Worker `handle()` (`cmd/worker/main.go`) payload'ni **target API'ga so'rov
@@ -151,7 +151,8 @@ Worker qaytaradigan natija: `{ "status_code": 200, "body": {...} }` — target A
 javobi. Boshqacha mantiq kerak bo'lsa (HTTP emas, hisoblash va h.k.) — `handle()`
 funksiyasini o'zgartiring.
 
-Worker env: `MESH_URL` (default `ws://localhost:8080/ws`), `TOKEN` (majburiy).
+Worker env: `RELAY_URL` (default `ws://localhost:8080/ws`; eski `MESH_URL` ham
+ishlaydi), `TOKEN` (majburiy).
 
 ### Misol — boshqa API'ga data yuborish
 

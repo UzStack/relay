@@ -1,6 +1,6 @@
 name: release
 
-# Release yaratilganda server (mesh) va worker binary'larini bir nechta platforma
+# Release yaratilganda server (relay) va worker binary'larini bir nechta platforma
 # uchun build qilib, release assets'ga yuklaydi.
 on:
   release:
@@ -44,10 +44,10 @@ jobs:
           suffix="${GOOS}-${GOARCH}"
           ldflags="-s -w -X main.version=${GITHUB_REF_NAME}"
 
-          # Server (mesh)
-          go build -trimpath -ldflags "$ldflags" -o "mesh-${suffix}${ext}" .
+          # Server (relay)
+          go build -trimpath -ldflags "$ldflags" -o "relay-${suffix}${ext}" .
           # Worker
-          go build -trimpath -ldflags "$ldflags" -o "mesh-worker-${suffix}${ext}" ./cmd/worker
+          go build -trimpath -ldflags "$ldflags" -o "relay-worker-${suffix}${ext}" ./cmd/worker
 
       - name: Upload assets to release
         env:
@@ -57,6 +57,6 @@ jobs:
           ext=""
           if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
           gh release upload "${GITHUB_REF_NAME}" \
-            "mesh-${suffix}${ext}" \
-            "mesh-worker-${suffix}${ext}" \
+            "relay-${suffix}${ext}" \
+            "relay-worker-${suffix}${ext}" \
             --clobber
