@@ -133,36 +133,72 @@ javob beradi.
 RELAY_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
 ```
 
-Worker `handle()` (`cmd/worker/main.go`) payload'ni **target API'ga so'rov
-ko'rsatmasi** deb o'qiydi va o'sha API'ga HTTP so'rov yuborib, javobni qaytaradi.
+Worker env: `RELAY_URL` (default `ws://localhost:8080/ws`; eski `MESH_URL` ham
+ishlaydi), `TOKEN` (majburiy).
 
+## Task turlari (kind)
+
+Server payload'ni **o'zgartirmaydi** — uni shundayligicha worker'ga uzatadi.
+Worker payload ichidagi **`kind`** (task turi) ga qarab tegishli ishni bajaradi.
 Payload formati:
 
 ```json
 {
-  "method":  "POST",                       // GET, POST... (bo'sh = GET)
-  "url":     "https://example.com/api/",   // target API (majburiy)
-  "headers": { "X-Api-Key": "..." },       // ixtiyoriy
-  "body":    { "summa": 1000 }             // yuboriladigan data (ixtiyoriy)
+  "kind": "http",          // task turi (majburiy)
+  "spec": { ... }          // shu turga xos parametrlar
 }
 ```
 
-Worker qaytaradigan natija: `{ "status_code": 200, "body": {...} }` — target API
-javobi. Boshqacha mantiq kerak bo'lsa (HTTP emas, hisoblash va h.k.) — `handle()`
-funksiyasini o'zgartiring.
+Hozir bitta tur — **`http`** — mavjud: `spec`'da ko'rsatilgan API'ga so'rov
+yuborib, javobini qaytaradi.
 
-Worker env: `RELAY_URL` (default `ws://localhost:8080/ws`; eski `MESH_URL` ham
-ishlaydi), `TOKEN` (majburiy).
+`http` spec:
 
-### Misol — boshqa API'ga data yuborish
+```json
+{
+  "kind": "http",
+  "spec": {
+    "method":  "POST",                       // GET, POST... (bo'sh = GET)
+    "url":     "https://example.com/api/",   // target API (majburiy)
+    "headers": { "X-Api-Key": "..." },       // ixtiyoriy
+    "body":    { "summa": 1000 }             // yuboriladigan data (ixtiyoriy)
+  }
+}
+```
+
+`http` natijasi: `{ "status_code": 200, "body": {...} }` — target API javobi.
+
+### Yangi task turi qo'shish
+
+Faqat **worker** o'zgaradi (server umumiy bo'lib qoladi). `cmd/worker/handlers.go`:
+
+1. `Handler` imzosiga mos funksiya yozing:
+   `func(taskID string, spec json.RawMessage) (json.RawMessage, error)`
+2. uni `handlers` map'iga kalit (kind) bilan qo'shing, masalan:
+
+```go
+var handlers = map[string]Handler{
+    "http":  httpHandler,
+    "email": emailHandler,   // yangi tur
+}
+```
+
+So'ngra `{"kind":"email","spec":{...}}` payload bilan task yuborsangiz, worker
+shu handler'ni ishga tushiradi. Noma'lum `kind` bo'lsa task `failed` bo'ladi va
+`attempt_log` da `noma'lum task turi` xatosi ko'rinadi.
+
+### Misol — `http` task yuborish
 
 ```bash
 curl -H "Authorization: Bearer secret" \
   -d '{
     "payload": {
-      "method": "POST",
-      "url": "https://example.com/api/",
-      "body": { "summa": 1000, "user_id": 42 }
+      "kind": "http",
+      "spec": {
+        "method": "POST",
+        "url": "https://example.com/api/",
+        "body": { "summa": 1000, "user_id": 42 }
+      }
     }
   }' \
   "localhost:8080/tasks?wait=true"

@@ -4,17 +4,16 @@
 //
 //	RELAY_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
 //
-// Worker server'dan task oladi, handle() funksiyasi orqali bajaradi va
-// natijani qaytaradi. Ulanish uzilsa avtomatik qayta ulanadi (backoff bilan).
+// Worker server'dan task oladi, turiga (kind) qarab tegishli handler orqali
+// bajaradi va natijani qaytaradi. Ulanish uzilsa avtomatik qayta ulanadi.
+//
+// Yangi task turi qo'shish uchun handlers.go ga qarang.
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -125,90 +124,36 @@ func run(url string) error {
 	}
 }
 
+// taskEnvelope — payload formati: qaysi TURDAGI ish (kind) va uning parametrlari (spec).
+// Masalan: {"kind":"http","spec":{"url":"...","method":"POST"}}
+type taskEnvelope struct {
+	Kind string          `json:"kind"` // task turi: "http", ... (majburiy)
+	Spec json.RawMessage `json:"spec"` // shu turga xos parametrlar
+}
+
 // process bitta task'ni bajaradi va natija xabarini qaytaradi.
 func process(t taskMessage) resultMessage {
-	data, err := handle(t.TaskID, t.Payload)
+	data, err := dispatch(t.TaskID, t.Payload)
 	if err != nil {
 		return resultMessage{Type: "result", TaskID: t.TaskID, Status: "failed", Error: err.Error()}
 	}
 	return resultMessage{Type: "result", TaskID: t.TaskID, Status: "done", Data: data}
 }
 
-// httpClient barcha forward so'rovlar uchun (timeout bilan).
-var httpClient = &http.Client{Timeout: 30 * time.Second}
-
-// httpTask — payload formati: worker qaysi API'ga, qanday so'rov yuborishini bildiradi.
-type httpTask struct {
-	Method  string            `json:"method"`  // GET, POST, ... (bo'sh bo'lsa GET)
-	URL     string            `json:"url"`     // target API manzili (majburiy)
-	Headers map[string]string `json:"headers"` // qo'shimcha header'lar (ixtiyoriy)
-	Body    json.RawMessage   `json:"body"`    // yuboriladigan body (ixtiyoriy, JSON)
-}
-
-// httpResult — so'rovchiga qaytadigan natija.
-type httpResult struct {
-	StatusCode int             `json:"status_code"`
-	Body       json.RawMessage `json:"body"`
-}
-
-// handle — payload'da ko'rsatilgan target API'ga HTTP so'rov yuboradi va javobni qaytaradi.
-func handle(taskID string, payload json.RawMessage) (json.RawMessage, error) {
-	var task httpTask
-	if err := json.Unmarshal(payload, &task); err != nil {
+// dispatch payload'ni kind/spec'ga ajratib, turiga mos handler'ni chaqiradi.
+func dispatch(taskID string, payload json.RawMessage) (json.RawMessage, error) {
+	var env taskEnvelope
+	if err := json.Unmarshal(payload, &env); err != nil {
 		return nil, fmt.Errorf("payload noto'g'ri: %w", err)
 	}
-	if task.URL == "" {
-		return nil, fmt.Errorf("payload.url majburiy")
+	if env.Kind == "" {
+		return nil, fmt.Errorf("payload.kind majburiy (masalan \"http\")")
 	}
-	method := task.Method
-	if method == "" {
-		method = http.MethodGet
+	h, ok := handlers[env.Kind]
+	if !ok {
+		return nil, fmt.Errorf("noma'lum task turi: %q", env.Kind)
 	}
-
-	var body io.Reader
-	if len(task.Body) > 0 {
-		body = bytes.NewReader(task.Body)
-	}
-	req, err := http.NewRequest(method, task.URL, body)
-	if err != nil {
-		return nil, fmt.Errorf("so'rov yaratish: %w", err)
-	}
-	for k, v := range task.Headers {
-		req.Header.Set(k, v)
-	}
-	if len(task.Body) > 0 && req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	log.Printf("task %s → %s %s", taskID, method, task.URL)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("target API xatosi: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("javobni o'qish: %w", err)
-	}
-
-	out, _ := json.Marshal(httpResult{
-		StatusCode: resp.StatusCode,
-		Body:       asJSON(raw),
-	})
-	return out, nil
-}
-
-// asJSON javob body'sini JSON bo'lsa o'sha holicha, aks holda string sifatida qaytaradi.
-func asJSON(b []byte) json.RawMessage {
-	if len(b) == 0 {
-		return json.RawMessage("null")
-	}
-	if json.Valid(b) {
-		return json.RawMessage(b)
-	}
-	quoted, _ := json.Marshal(string(b))
-	return quoted
+	return h(taskID, env.Spec)
 }
 
 func getenv(key, def string) string {
