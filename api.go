@@ -43,10 +43,10 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-// auth bearer token'ni tekshiruvchi middleware.
+// auth API token'ini tekshiruvchi middleware (task yuborish/o'qish uchun).
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.validToken(r) {
+		if !tokenMatches(r, s.cfg.APIToken) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
 			return
 		}
@@ -54,19 +54,22 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// validToken Authorization: Bearer <token> yoki ?token= ni tekshiradi.
-func (s *Server) validToken(r *http.Request) bool {
+// tokenMatches Authorization: Bearer <token> yoki ?token= ni kutilgan token bilan solishtiradi.
+func tokenMatches(r *http.Request, want string) bool {
+	if want == "" {
+		return false
+	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		if strings.TrimPrefix(h, "Bearer ") == s.cfg.AuthToken {
+		if strings.TrimPrefix(h, "Bearer ") == want {
 			return true
 		}
 	}
-	return r.URL.Query().Get("token") == s.cfg.AuthToken
+	return r.URL.Query().Get("token") == want
 }
 
-// handleWS worker WebSocket ulanishini qabul qiladi.
+// handleWS worker WebSocket ulanishini qabul qiladi (WORKER_TOKEN bilan).
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	if !s.validToken(r) {
+	if !tokenMatches(r, s.cfg.WorkerToken) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
 		return
 	}

@@ -19,7 +19,7 @@ so'rovlarni real-time ulangan worker client'larga yuboradi va javobni qaytaradi.
 ## Ishga tushirish
 
 ```bash
-AUTH_TOKEN=secret go run .
+WORKER_TOKEN=wtok API_TOKEN=atok go run .
 # :8080 da tinglaydi
 ```
 
@@ -28,12 +28,22 @@ Sozlamalar (env):
 | Var | Default | Tavsif |
 |-----|---------|--------|
 | `PORT` | `8080` | HTTP/WS port |
-| `AUTH_TOKEN` | — (majburiy) | Statik bearer token |
+| `WORKER_TOKEN` | — (majburiy) | Worker'lar `/ws` ga ulanish tokeni |
+| `API_TOKEN` | — (majburiy) | Task yuborish/o'qish API tokeni |
+| `AUTH_TOKEN` | — | Eski yagona token: yuqoridagilardan biri berilmasa shu ishlatiladi |
 | `PING_INTERVAL` | `2s` | Heartbeat ping oralig'i |
 | `PONG_WAIT` | `6s` | Pong kutish (read deadline) |
 | `TASK_TIMEOUT` | `10s` | Bitta urinish: worker javobini kutish, so'ng retry |
 | `MAX_RETRIES` | `2` | Javob kelmasa nechta BOSHQA worker'ga qayta yuborish |
 | `WAIT_TIMEOUT` | `35s` | `?wait=true` uchun maksimal HTTP kutish |
+
+**Ikkita alohida token:**
+- **`WORKER_TOKEN`** — worker'lar WebSocket bilan ulanish uchun (`TOKEN` env'i shu bo'ladi).
+- **`API_TOKEN`** — tashqi xizmatlar task yuborish/o'qish uchun (`Authorization: Bearer`).
+
+Shu ikki token bir-biridan farq qiladi: worker tokeni bilan API'ga so'rov yuborib
+bo'lmaydi va aksincha. Faqat bittasini berib (yoki eski `AUTH_TOKEN` bilan)
+ikkalasi uchun bir xil token ham ishlatsa bo'ladi.
 
 ## Fallback qanday ishlaydi
 
@@ -80,8 +90,8 @@ curl -H "Authorization: Bearer secret" localhost:8080/clients
 # → { "count": 2, "clients": [ {"client_id":"...","ip":"10.0.0.5","connected_at":"..."}, ... ] }
 ```
 
-Barcha HTTP so'rovlar `Authorization: Bearer <AUTH_TOKEN>` talab qiladi
-(WS uchun `?token=` ham bo'ladi).
+Barcha task API so'rovlari `Authorization: Bearer <API_TOKEN>` talab qiladi.
+Worker WS ulanishi esa `?token=<WORKER_TOKEN>` orqali autentifikatsiya qilinadi.
 
 ## API
 
@@ -134,7 +144,8 @@ RELAY_URL=ws://localhost:8080/ws TOKEN=secret go run ./cmd/worker
 ```
 
 Worker env: `RELAY_URL` (default `ws://localhost:8080/ws`; eski `MESH_URL` ham
-ishlaydi), `TOKEN` (majburiy).
+ishlaydi), `TOKEN` (majburiy — server'ning **`WORKER_TOKEN`**'iga teng bo'lishi
+kerak).
 
 ## Task turlari (kind)
 

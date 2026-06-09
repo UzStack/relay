@@ -16,7 +16,8 @@ import (
 func startTestServer(t *testing.T) (*httptest.Server, *Hub) {
 	t.Helper()
 	cfg := Config{
-		AuthToken:    "secret",
+		WorkerToken:  "secret",
+		APIToken:     "secret",
 		PingInterval: 50 * time.Millisecond,
 		PongWait:     200 * time.Millisecond,
 		WaitTimeout:  2 * time.Second,
