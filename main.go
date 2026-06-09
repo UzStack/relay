@@ -5,8 +5,12 @@ import (
 	"net/http"
 )
 
+// version build vaqtida ldflags orqali o'rnatiladi (-X main.version=...).
+var version = "dev"
+
 func main() {
 	cfg := LoadConfig()
+	log.Printf("mesh versiya: %s", version)
 
 	store := NewTaskStore()
 	hub := NewHub(cfg, store)

@@ -44,7 +44,11 @@ const (
 	maxBackoff = 30 * time.Second
 )
 
+// version build vaqtida ldflags orqali o'rnatiladi (-X main.version=...).
+var version = "dev"
+
 func main() {
+	log.Printf("mesh-worker versiya: %s", version)
 	url := getenv("MESH_URL", "ws://localhost:8080/ws")
 	token := os.Getenv("TOKEN")
 	if token == "" {
