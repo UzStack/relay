@@ -45,6 +45,8 @@ func (c *Client) readPump() {
 		c.conn.Close()
 	}()
 
+	// Worker'dan keladigan xabar hajmini cheklaymiz (RAM'ni to'ldirishning oldini oladi).
+	c.conn.SetReadLimit(cfg.MaxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(cfg.PongWait))
 	// Har pong kelganda read deadline'ni uzaytiramiz → client active hisoblanadi.
 	c.conn.SetPongHandler(func(string) error {

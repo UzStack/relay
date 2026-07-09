@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,16 +82,22 @@ func (s *Server) authAny(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // tokenMatches Authorization: Bearer <token> yoki ?token= ni kutilgan token bilan solishtiradi.
+// Solishtirish constant-time (timing-attack'ning oldini oladi).
 func tokenMatches(r *http.Request, want string) bool {
 	if want == "" {
 		return false
 	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		if strings.TrimPrefix(h, "Bearer ") == want {
+		if secureEqual(strings.TrimPrefix(h, "Bearer "), want) {
 			return true
 		}
 	}
-	return r.URL.Query().Get("token") == want
+	return secureEqual(r.URL.Query().Get("token"), want)
+}
+
+// secureEqual ikki tokenni constant-time solishtiradi (uzunlik farqi tez rad etiladi).
+func secureEqual(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 // handleWS worker WebSocket ulanishini qabul qiladi (WORKER_TOKEN bilan).

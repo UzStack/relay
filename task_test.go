@@ -65,6 +65,27 @@ func TestWaitTimeout(t *testing.T) {
 	}
 }
 
+func TestGCEvictsOnlyTerminalExpired(t *testing.T) {
+	s := NewTaskStore()
+	done := s.Create(nil)
+	s.Finalize(done.ID, StatusDone, nil, "")
+	// yakunlangan task'ni sun'iy ravishda eskirtiramiz
+	s.mu.Lock()
+	s.tasks[done.ID].UpdatedAt = time.Now().Add(-2 * time.Hour)
+	s.mu.Unlock()
+
+	pending := s.Create(nil) // in-flight — tegilmasligi kerak
+
+	s.GC(time.Hour)
+
+	if _, ok := s.Get(done.ID); ok {
+		t.Fatal("eskirgan yakunlangan task o'chirilishi kerak edi")
+	}
+	if _, ok := s.Get(pending.ID); !ok {
+		t.Fatal("in-flight (pending) task saqlanishi kerak edi")
+	}
+}
+
 func TestEmitDisconnectSignalsOpenTasks(t *testing.T) {
 	s := NewTaskStore()
 	a := s.Create(nil)

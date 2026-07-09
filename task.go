@@ -29,11 +29,11 @@ type taskEvent struct {
 
 // Attempt — bitta worker'ga urinishning natijasi (tarix uchun).
 type Attempt struct {
-	Num      int    `json:"num"`              // urinish raqami (1, 2, ...)
-	ClientID string `json:"client_id"`        // qaysi worker
-	ClientIP string `json:"client_ip"`        // worker IP'si
-	Outcome  string `json:"outcome"`          // done / timeout / failed / disconnect / send_failed
-	Error    string `json:"error,omitempty"`  // muvaffaqiyatsizlik sababi
+	Num      int    `json:"num"`             // urinish raqami (1, 2, ...)
+	ClientID string `json:"client_id"`       // qaysi worker
+	ClientIP string `json:"client_ip"`       // worker IP'si
+	Outcome  string `json:"outcome"`         // done / timeout / failed / disconnect / send_failed
+	Error    string `json:"error,omitempty"` // muvaffaqiyatsizlik sababi
 }
 
 // Task bitta so'rovni ifodalaydi.
@@ -43,9 +43,9 @@ type Task struct {
 	Payload    json.RawMessage `json:"payload,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	Error      string          `json:"error,omitempty"`
-	ClientID   string          `json:"client_id,omitempty"` // taskni bajargan (yoki joriy) worker
-	ClientIP   string          `json:"client_ip,omitempty"` // shu worker IP'si
-	Attempts   int             `json:"attempts"`            // nechta worker'ga urinilgani
+	ClientID   string          `json:"client_id,omitempty"`   // taskni bajargan (yoki joriy) worker
+	ClientIP   string          `json:"client_ip,omitempty"`   // shu worker IP'si
+	Attempts   int             `json:"attempts"`              // nechta worker'ga urinilgani
 	AttemptLog []Attempt       `json:"attempt_log,omitempty"` // har urinish tarixi
 	CreatedAt  time.Time       `json:"created_at"`
 	UpdatedAt  time.Time       `json:"updated_at"`
@@ -175,6 +175,27 @@ func (s *TaskStore) Wait(t *Task, timeout time.Duration) bool {
 		return true
 	case <-timer.C:
 		return false
+	}
+}
+
+// GC ttl'dan eski YAKUNLANGAN task'larni o'chiradi (in-flight task'larga tegmaydi).
+func (s *TaskStore) GC(ttl time.Duration) {
+	cutoff := time.Now().Add(-ttl)
+	s.mu.Lock()
+	for id, t := range s.tasks {
+		if isTerminal(t.Status) && t.UpdatedAt.Before(cutoff) {
+			delete(s.tasks, id)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// RunGC har interval'da GC ishga tushiradi (goroutine'da chaqiriladi).
+func (s *TaskStore) RunGC(interval, ttl time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.GC(ttl)
 	}
 }
 

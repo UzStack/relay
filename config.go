@@ -10,17 +10,19 @@ import (
 
 // Config holadi xizmatning barcha sozlamalarini (env'dan o'qiladi).
 type Config struct {
-	Port         string        // HTTP/WS port
-	WorkerToken  string        // worker'lar /ws ga ulanishi uchun token
-	APIToken     string        // task yuborish/o'qish API'si uchun token
-	PingInterval time.Duration // heartbeat ping oralig'i
-	PongWait     time.Duration // pong kutish (read deadline)
-	WaitTimeout  time.Duration // ?wait=true uchun maksimal HTTP kutish
-	TaskTimeout  time.Duration // bitta urinish uchun: worker javobini kutish (so'ng retry)
-	MaxRetries   int           // javob kelmasa nechta BOSHQA worker'ga qayta yuborish
-	BlobDir      string        // yuklangan fayllar saqlanadigan katalog
-	BlobTTL      time.Duration // fayl qancha saqlanadi (so'ng GC o'chiradi)
-	MaxFileSize  int64         // bitta fayl uchun maksimal hajm (bayt)
+	Port           string        // HTTP/WS port
+	WorkerToken    string        // worker'lar /ws ga ulanishi uchun token
+	APIToken       string        // task yuborish/o'qish API'si uchun token
+	PingInterval   time.Duration // heartbeat ping oralig'i
+	PongWait       time.Duration // pong kutish (read deadline)
+	WaitTimeout    time.Duration // ?wait=true uchun maksimal HTTP kutish
+	TaskTimeout    time.Duration // bitta urinish uchun: worker javobini kutish (so'ng retry)
+	MaxRetries     int           // javob kelmasa nechta BOSHQA worker'ga qayta yuborish
+	BlobDir        string        // yuklangan fayllar saqlanadigan katalog
+	BlobTTL        time.Duration // fayl qancha saqlanadi (so'ng GC o'chiradi)
+	MaxFileSize    int64         // bitta fayl uchun maksimal hajm (bayt)
+	TaskTTL        time.Duration // yakunlangan task qancha saqlanadi (so'ng GC o'chiradi)
+	MaxMessageSize int64         // worker'dan keladigan WS xabar uchun maksimal hajm (bayt)
 }
 
 // LoadConfig env'dan sozlamalarni o'qiydi.
@@ -33,17 +35,19 @@ type Config struct {
 func LoadConfig() Config {
 	authToken := os.Getenv("AUTH_TOKEN") // eski yagona token (fallback)
 	cfg := Config{
-		Port:         getenv("PORT", "8080"),
-		WorkerToken:  getenv("WORKER_TOKEN", authToken),
-		APIToken:     getenv("API_TOKEN", authToken),
-		PingInterval: getdur("PING_INTERVAL", 2*time.Second),
-		PongWait:     getdur("PONG_WAIT", 6*time.Second),
-		WaitTimeout:  getdur("WAIT_TIMEOUT", 35*time.Second),
-		TaskTimeout:  getdur("TASK_TIMEOUT", 10*time.Second),
-		MaxRetries:   getint("MAX_RETRIES", 2),
-		BlobDir:      getenv("BLOB_DIR", filepath.Join(os.TempDir(), "relay-blobs")),
-		BlobTTL:      getdur("BLOB_TTL", time.Hour),
-		MaxFileSize:  getint64("MAX_FILE_SIZE", 100<<20), // 100 MiB
+		Port:           getenv("PORT", "8080"),
+		WorkerToken:    getenv("WORKER_TOKEN", authToken),
+		APIToken:       getenv("API_TOKEN", authToken),
+		PingInterval:   getdur("PING_INTERVAL", 2*time.Second),
+		PongWait:       getdur("PONG_WAIT", 6*time.Second),
+		WaitTimeout:    getdur("WAIT_TIMEOUT", 35*time.Second),
+		TaskTimeout:    getdur("TASK_TIMEOUT", 10*time.Second),
+		MaxRetries:     getint("MAX_RETRIES", 2),
+		BlobDir:        getenv("BLOB_DIR", filepath.Join(os.TempDir(), "relay-blobs")),
+		BlobTTL:        getdur("BLOB_TTL", time.Hour),
+		MaxFileSize:    getint64("MAX_FILE_SIZE", 100<<20), // 100 MiB
+		TaskTTL:        getdur("TASK_TTL", time.Hour),
+		MaxMessageSize: getint64("MAX_MESSAGE_SIZE", 1<<20), // 1 MiB
 	}
 	if cfg.WorkerToken == "" {
 		log.Fatal("WORKER_TOKEN (yoki AUTH_TOKEN) env o'rnatilishi shart")

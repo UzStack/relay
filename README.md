@@ -39,6 +39,13 @@ Sozlamalar (env):
 | `BLOB_DIR` | `$TMPDIR/relay-blobs` | Yuklangan fayllar saqlanadigan katalog |
 | `BLOB_TTL` | `1h` | Fayl qancha saqlanadi (so'ng avtomatik o'chiriladi) |
 | `MAX_FILE_SIZE` | `104857600` (100 MiB) | Bitta fayl uchun maksimal hajm (bayt) |
+| `TASK_TTL` | `1h` | Yakunlangan task qancha saqlanadi (so'ng xotiradan o'chiriladi) |
+| `MAX_MESSAGE_SIZE` | `1048576` (1 MiB) | Worker'dan keladigan WS xabar uchun maksimal hajm (bayt) |
+
+> **Holat in-memory:** task'lar, ularning natijalari va yuklangan fayllar faqat
+> xotirada/diskda vaqtincha saqlanadi — server qayta ishga tushsa hammasi
+> yo'qoladi (persistence yo'q). Yakunlangan task'lar `TASK_TTL`, fayllar
+> `BLOB_TTL` o'tgach avtomatik o'chiriladi (xotira cheksiz o'smaydi).
 
 **Ikkita alohida token:**
 - **`WORKER_TOKEN`** — worker'lar WebSocket bilan ulanish uchun (`TOKEN` env'i shu bo'ladi).

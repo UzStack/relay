@@ -18,14 +18,15 @@ import (
 func startTestServer(t *testing.T) (*httptest.Server, *Hub) {
 	t.Helper()
 	cfg := Config{
-		WorkerToken:  "secret",
-		APIToken:     "secret",
-		PingInterval: 50 * time.Millisecond,
-		PongWait:     200 * time.Millisecond,
-		WaitTimeout:  2 * time.Second,
-		TaskTimeout:  500 * time.Millisecond,
-		MaxRetries:   2,
-		MaxFileSize:  10 << 20,
+		WorkerToken:    "secret",
+		APIToken:       "secret",
+		PingInterval:   50 * time.Millisecond,
+		PongWait:       200 * time.Millisecond,
+		WaitTimeout:    2 * time.Second,
+		TaskTimeout:    500 * time.Millisecond,
+		MaxRetries:     2,
+		MaxFileSize:    10 << 20,
+		MaxMessageSize: 1 << 20,
 	}
 	store := NewTaskStore()
 	hub := NewHub(cfg, store)

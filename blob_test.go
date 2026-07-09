@@ -57,11 +57,11 @@ func TestBlobStore_GC(t *testing.T) {
 
 func TestSanitizeFilename(t *testing.T) {
 	cases := map[string]string{
-		"note.txt":        "note.txt",
+		"note.txt":         "note.txt",
 		"../../etc/passwd": "passwd",
 		"a\"b\nc.txt":      "abc.txt",
-		"/":               "",
-		"":                "",
+		"/":                "",
+		"":                 "",
 	}
 	for in, want := range cases {
 		if got := sanitizeFilename(in); got != want {

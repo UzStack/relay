@@ -13,6 +13,7 @@ func main() {
 	log.Printf("relay versiya: %s", version)
 
 	store := NewTaskStore()
+	go store.RunGC(cfg.TaskTTL/2, cfg.TaskTTL)
 	hub := NewHub(cfg, store)
 	go hub.Run()
 
