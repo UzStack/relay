@@ -54,6 +54,7 @@ func main() {
 	if token == "" {
 		log.Fatal("TOKEN env o'rnatilishi shart")
 	}
+	files = newFileClient(url, token) // token qo'shilishidan oldingi bazadan
 	url += "?token=" + token
 
 	backoff := time.Second

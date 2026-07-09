@@ -2,28 +2,38 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
+// multipartOverhead — /files upload uchun MaxFileSize ustiga qo'shiladigan zaxira
+// (multipart chegaralari va boshqa maydonlar uchun).
+const multipartOverhead = 1 << 20 // 1 MiB
+
 // Server HTTP/WS handler'larni va bog'liqliklarni ushlaydi.
 type Server struct {
 	cfg      Config
 	hub      *Hub
 	store    *TaskStore
+	blobs    *BlobStore
 	upgrader websocket.Upgrader
 }
 
-func NewServer(cfg Config, hub *Hub, store *TaskStore) *Server {
+func NewServer(cfg Config, hub *Hub, store *TaskStore, blobs *BlobStore) *Server {
 	return &Server{
 		cfg:   cfg,
 		hub:   hub,
 		store: store,
+		blobs: blobs,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -40,6 +50,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /tasks/{id}", s.auth(s.handleGetTask))
 	mux.HandleFunc("GET /clients", s.auth(s.handleClients))
 	mux.HandleFunc("GET /healthz", s.auth(s.handleHealth))
+	// Fayl endpoint'lari ikkala tomon uchun: tashqi client (upload/download) va
+	// worker (kirishni oladi, natijani yuklaydi) — shu bois authAny.
+	mux.HandleFunc("POST /files", s.authAny(s.handleUpload))
+	mux.HandleFunc("GET /files/{id}", s.authAny(s.handleDownload))
 	return mux
 }
 
@@ -47,6 +61,18 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !tokenMatches(r, s.cfg.APIToken) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// authAny API yoki WORKER token'ini qabul qiladi (fayl endpoint'lari ikkala
+// tomon — tashqi client va worker — tomonidan ishlatiladi).
+func (s *Server) authAny(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !tokenMatches(r, s.cfg.APIToken) && !tokenMatches(r, s.cfg.WorkerToken) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
 			return
 		}
@@ -162,6 +188,54 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"tasks_total":     total,
 		"tasks_by_status": byStatus,
 	})
+}
+
+// handleUpload multipart/form-data'dagi "file" maydonini omborga stream qilib
+// yozadi va file_id/metama'lumotni qaytaradi. Task payload'iga baytlar emas,
+// shu file_id uzatiladi.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	// Limitdan katta body'ni multipart uni to'liq spool qilmasidan oldin to'xtatamiz.
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxFileSize+multipartOverhead)
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "fayl hajmi limitdan oshib ketdi"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "\"file\" maydoni topilmadi"})
+		return
+	}
+	defer file.Close()
+
+	meta, err := s.blobs.Put(header.Filename, header.Header.Get("Content-Type"), file)
+	if err != nil {
+		if errors.Is(err, ErrBlobTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "fayl hajmi limitdan oshib ketdi"})
+			return
+		}
+		log.Printf("fayl saqlash xatosi: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "faylni saqlab bo'lmadi"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, meta)
+}
+
+// handleDownload file_id bo'yicha faylni stream qilib qaytaradi.
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	meta, f, err := s.blobs.Open(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "fayl topilmadi"})
+		return
+	}
+	defer f.Close()
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	if meta.Filename != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", meta.Filename))
+	}
+	io.Copy(w, f)
 }
 
 // clientIP so'rovning haqiqiy IP manzilini aniqlaydi (proxy header'larini hisobga olib).

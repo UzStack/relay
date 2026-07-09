@@ -36,6 +36,9 @@ Sozlamalar (env):
 | `TASK_TIMEOUT` | `10s` | Bitta urinish: worker javobini kutish, so'ng retry |
 | `MAX_RETRIES` | `2` | Javob kelmasa nechta BOSHQA worker'ga qayta yuborish |
 | `WAIT_TIMEOUT` | `35s` | `?wait=true` uchun maksimal HTTP kutish |
+| `BLOB_DIR` | `$TMPDIR/relay-blobs` | Yuklangan fayllar saqlanadigan katalog |
+| `BLOB_TTL` | `1h` | Fayl qancha saqlanadi (so'ng avtomatik o'chiriladi) |
+| `MAX_FILE_SIZE` | `104857600` (100 MiB) | Bitta fayl uchun maksimal hajm (bayt) |
 
 **Ikkita alohida token:**
 - **`WORKER_TOKEN`** — worker'lar WebSocket bilan ulanish uchun (`TOKEN` env'i shu bo'ladi).
@@ -103,6 +106,8 @@ Worker WS ulanishi esa `?token=<WORKER_TOKEN>` orqali autentifikatsiya qilinadi.
 | GET | `/tasks/{id}` | Task status, javob va urinishlar tarixini olish |
 | GET | `/clients` | Ulangan worker'lar ro'yxati (id, ip, vaqt) |
 | GET | `/healthz` | Active client / task statistikasi |
+| POST | `/files` | Fayl yuklash (multipart `file` maydoni) → `file_id` |
+| GET | `/files/{id}` | Fayl yuklab olish (`file_id` bo'yicha) |
 
 ### Async namuna
 ```bash
@@ -120,6 +125,41 @@ curl -H "Authorization: Bearer secret" \
      -d '{"payload":{"x":1}}' "localhost:8080/tasks?wait=true"
 # javob kelguncha bloklab turadi, keyin to'liq natijani qaytaradi
 ```
+
+## Fayl uzatish (upload / download)
+
+Fayllar task pipeline'i (JSON/WebSocket) orqali emas, **alohida HTTP kanali**
+orqali yuriladi: fayl baytlari diskka yoziladi, task payload'iga esa faqat
+`file_id` (reference) uzatiladi. Shu tufayli WebSocket yengil qoladi va katta
+fayllar RAM'ni to'ldirmaydi. Fayllar `BLOB_TTL` o'tgach avtomatik o'chiriladi.
+
+`/files` endpoint'lari **ham API, ham WORKER** tokenini qabul qiladi (ikkala tomon
+ishlatadi).
+
+**Upload (tashqi client → worker):**
+
+```bash
+# 1) faylni yuklaymiz → file_id olamiz
+curl -H "Authorization: Bearer atok" -F "file=@hujjat.pdf" localhost:8080/files
+# → {"file_id":"...","filename":"hujjat.pdf","content_type":"application/pdf","size":12345,...}
+
+# 2) file_id'ni task spec'ida uzatamiz
+curl -H "Authorization: Bearer atok" \
+  -d '{"payload":{"kind":"file","spec":{"file_id":"<file_id>"}}}' \
+  "localhost:8080/tasks?wait=true"
+# → worker faylni GET /files/<id> orqali yuklab oladi, qayta ishlaydi
+```
+
+**Download (worker → tashqi client):**
+Worker natija faylni `POST /files` orqali yuklaydi va javobda `result_file_id`
+qaytaradi; client uni `GET /files/{id}` orqali oladi:
+
+```bash
+curl -H "Authorization: Bearer atok" -OJ localhost:8080/files/<result_file_id>
+```
+
+Worker tomonida `cmd/worker/files.go` shu ikki amalni (`Download`/`Upload`)
+bajaradi; namuna `file` handler'i `cmd/worker/handlers.go` da.
 
 ## WebSocket protokoli
 
@@ -160,8 +200,11 @@ Payload formati:
 }
 ```
 
-Hozir bitta tur — **`http`** — mavjud: `spec`'da ko'rsatilgan API'ga so'rov
-yuborib, javobini qaytaradi.
+Hozir ikkita tur mavjud:
+- **`http`** — `spec`'da ko'rsatilgan API'ga so'rov yuborib, javobini qaytaradi.
+- **`file`** — `spec.file_id` orqali faylni relay'dan yuklab oladi, qayta ishlaydi
+  va natijani yangi fayl sifatida yuklab `result_file_id` qaytaradi (yuqoridagi
+  *Fayl uzatish* bo'limiga qarang).
 
 `http` spec:
 

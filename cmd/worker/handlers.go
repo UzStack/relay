@@ -23,6 +23,7 @@ type Handler func(taskID string, spec json.RawMessage) (json.RawMessage, error)
 // Server hech narsani o'zgartirmaydi — u faqat payload'ni worker'ga uzatadi.
 var handlers = map[string]Handler{
 	"http": httpHandler,
+	"file": fileHandler,
 	// "shell": shellHandler,   // masalan kelajakda
 	// "email": emailHandler,
 }
@@ -91,6 +92,51 @@ func httpHandler(taskID string, spec json.RawMessage) (json.RawMessage, error) {
 		StatusCode: resp.StatusCode,
 		Body:       asJSON(raw),
 	})
+	return out, nil
+}
+
+// --- file task turi --------------------------------------------------------
+
+// fileSpec — "file" task turi spec'i.
+type fileSpec struct {
+	FileID string `json:"file_id"` // qayta ishlanadigan kirish fayli (majburiy)
+}
+
+// fileResult — natija: qayta ishlangan fayl ombordagi yangi id bilan.
+type fileResult struct {
+	InputSize    int    `json:"input_size"`
+	ResultFileID string `json:"result_file_id"`
+}
+
+// fileHandler kirish faylni relay'dan yuklab oladi, oddiy "qayta ishlash" qilib
+// natijani yangi fayl sifatida yuklaydi va uning file_id'sini qaytaradi.
+// Bu download (worker kirishni oladi) va upload (worker natijani yuklaydi)
+// ikkala yo'nalishni ham namoyish qiladi.
+func fileHandler(taskID string, spec json.RawMessage) (json.RawMessage, error) {
+	if files == nil {
+		return nil, fmt.Errorf("fayl klienti sozlanmagan")
+	}
+	var s fileSpec
+	if err := json.Unmarshal(spec, &s); err != nil {
+		return nil, fmt.Errorf("file spec noto'g'ri: %w", err)
+	}
+	if s.FileID == "" {
+		return nil, fmt.Errorf("file.spec.file_id majburiy")
+	}
+
+	data, err := files.Download(s.FileID)
+	if err != nil {
+		return nil, fmt.Errorf("kirish faylni yuklash: %w", err)
+	}
+	log.Printf("task %s [file] → kirish %d bayt yuklab olindi", taskID, len(data))
+
+	// Namuna "qayta ishlash": shu baytlarni natija fayl sifatida qaytaramiz.
+	resultID, err := files.Upload("processed-"+s.FileID, "application/octet-stream", data)
+	if err != nil {
+		return nil, fmt.Errorf("natija faylni yuklash: %w", err)
+	}
+
+	out, _ := json.Marshal(fileResult{InputSize: len(data), ResultFileID: resultID})
 	return out, nil
 }
 

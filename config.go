@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -17,6 +18,9 @@ type Config struct {
 	WaitTimeout  time.Duration // ?wait=true uchun maksimal HTTP kutish
 	TaskTimeout  time.Duration // bitta urinish uchun: worker javobini kutish (so'ng retry)
 	MaxRetries   int           // javob kelmasa nechta BOSHQA worker'ga qayta yuborish
+	BlobDir      string        // yuklangan fayllar saqlanadigan katalog
+	BlobTTL      time.Duration // fayl qancha saqlanadi (so'ng GC o'chiradi)
+	MaxFileSize  int64         // bitta fayl uchun maksimal hajm (bayt)
 }
 
 // LoadConfig env'dan sozlamalarni o'qiydi.
@@ -37,6 +41,9 @@ func LoadConfig() Config {
 		WaitTimeout:  getdur("WAIT_TIMEOUT", 35*time.Second),
 		TaskTimeout:  getdur("TASK_TIMEOUT", 10*time.Second),
 		MaxRetries:   getint("MAX_RETRIES", 2),
+		BlobDir:      getenv("BLOB_DIR", filepath.Join(os.TempDir(), "relay-blobs")),
+		BlobTTL:      getdur("BLOB_TTL", time.Hour),
+		MaxFileSize:  getint64("MAX_FILE_SIZE", 100<<20), // 100 MiB
 	}
 	if cfg.WorkerToken == "" {
 		log.Fatal("WORKER_TOKEN (yoki AUTH_TOKEN) env o'rnatilishi shart")
@@ -57,6 +64,16 @@ func getenv(key, def string) string {
 func getint(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+		log.Printf("ogohlantirish: %s noto'g'ri son, default ishlatiladi: %d", key, def)
+	}
+	return def
+}
+
+func getint64(key string, def int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return n
 		}
 		log.Printf("ogohlantirish: %s noto'g'ri son, default ishlatiladi: %d", key, def)

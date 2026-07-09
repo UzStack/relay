@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,11 +25,16 @@ func startTestServer(t *testing.T) (*httptest.Server, *Hub) {
 		WaitTimeout:  2 * time.Second,
 		TaskTimeout:  500 * time.Millisecond,
 		MaxRetries:   2,
+		MaxFileSize:  10 << 20,
 	}
 	store := NewTaskStore()
 	hub := NewHub(cfg, store)
 	go hub.Run()
-	srv := NewServer(cfg, hub, store)
+	blobs, err := NewBlobStore(t.TempDir(), time.Hour, cfg.MaxFileSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(cfg, hub, store, blobs)
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)
 	return ts, hub
@@ -155,6 +162,67 @@ func TestE2E_Heartbeat(t *testing.T) {
 	// worker pong'larga javob bermay to'satdan yopiladi → inactive bo'lishi kerak
 	conn.Close()
 	waitFor(t, func() bool { return hub.ActiveCount() == 0 })
+}
+
+func TestE2E_FileRoundTrip(t *testing.T) {
+	ts, _ := startTestServer(t)
+
+	// upload
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, _ := mw.CreateFormFile("file", "note.txt")
+	part.Write([]byte("salom dunyo"))
+	mw.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/files", &buf)
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: kutilgan 201, olindi %d", resp.StatusCode)
+	}
+	var meta struct {
+		FileID string `json:"file_id"`
+		Size   int64  `json:"size"`
+	}
+	json.NewDecoder(resp.Body).Decode(&meta)
+	resp.Body.Close()
+	if meta.FileID == "" || meta.Size != 11 {
+		t.Fatalf("noto'g'ri meta: %+v", meta)
+	}
+
+	// download
+	dreq, _ := http.NewRequest("GET", ts.URL+"/files/"+meta.FileID, nil)
+	dreq.Header.Set("Authorization", "Bearer secret")
+	dresp, err := http.DefaultClient.Do(dreq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dresp.Body.Close()
+	if dresp.StatusCode != http.StatusOK {
+		t.Fatalf("download: kutilgan 200, olindi %d", dresp.StatusCode)
+	}
+	got, _ := io.ReadAll(dresp.Body)
+	if string(got) != "salom dunyo" {
+		t.Fatalf("noto'g'ri fayl mazmuni: %q", got)
+	}
+}
+
+func TestE2E_FileNotFound(t *testing.T) {
+	ts, _ := startTestServer(t)
+	req, _ := http.NewRequest("GET", ts.URL+"/files/yoq-id", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("kutilgan 404, olindi %d", resp.StatusCode)
+	}
 }
 
 func waitFor(t *testing.T, cond func() bool) {

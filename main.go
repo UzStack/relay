@@ -16,7 +16,13 @@ func main() {
 	hub := NewHub(cfg, store)
 	go hub.Run()
 
-	srv := NewServer(cfg, hub, store)
+	blobs, err := NewBlobStore(cfg.BlobDir, cfg.BlobTTL, cfg.MaxFileSize)
+	if err != nil {
+		log.Fatalf("blob store: %v", err)
+	}
+	go blobs.RunGC(cfg.BlobTTL / 2)
+
+	srv := NewServer(cfg, hub, store, blobs)
 
 	addr := ":" + cfg.Port
 	log.Printf("relay ishga tushdi: %s (ping interval: %s)", addr, cfg.PingInterval)
