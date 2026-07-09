@@ -23,6 +23,8 @@ type Config struct {
 	MaxFileSize    int64         // bitta fayl uchun maksimal hajm (bayt)
 	TaskTTL        time.Duration // yakunlangan task qancha saqlanadi (so'ng GC o'chiradi)
 	MaxMessageSize int64         // worker'dan keladigan WS xabar uchun maksimal hajm (bayt)
+	TokenSecret    string        // JWT scoped-token'larni imzolash/tekshirish siri (bo'sh = o'chirilgan)
+	TokenStore     string        // token reyestri (JSON) fayl yo'li
 }
 
 // LoadConfig env'dan sozlamalarni o'qiydi.
@@ -48,6 +50,8 @@ func LoadConfig() Config {
 		MaxFileSize:    getint64("MAX_FILE_SIZE", 100<<20), // 100 MiB
 		TaskTTL:        getdur("TASK_TTL", time.Hour),
 		MaxMessageSize: getint64("MAX_MESSAGE_SIZE", 1<<20), // 1 MiB
+		TokenSecret:    os.Getenv("TOKEN_SECRET"),
+		TokenStore:     getenv("TOKEN_STORE", "relay-tokens.json"),
 	}
 	if cfg.WorkerToken == "" {
 		log.Fatal("WORKER_TOKEN (yoki AUTH_TOKEN) env o'rnatilishi shart")

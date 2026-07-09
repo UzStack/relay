@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,15 +28,17 @@ type Server struct {
 	hub      *Hub
 	store    *TaskStore
 	blobs    *BlobStore
+	tokens   *TokenRegistry // JWT scoped-token'lar (nil bo'lsa faqat root API_TOKEN)
 	upgrader websocket.Upgrader
 }
 
-func NewServer(cfg Config, hub *Hub, store *TaskStore, blobs *BlobStore) *Server {
+func NewServer(cfg Config, hub *Hub, store *TaskStore, blobs *BlobStore, tokens *TokenRegistry) *Server {
 	return &Server{
-		cfg:   cfg,
-		hub:   hub,
-		store: store,
-		blobs: blobs,
+		cfg:    cfg,
+		hub:    hub,
+		store:  store,
+		blobs:  blobs,
+		tokens: tokens,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -58,41 +62,89 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-// auth API token'ini tekshiruvchi middleware (task yuborish/o'qish uchun).
+// authInfo autentifikatsiya natijasi: token qanday kind'larga ruxsat berishini bildiradi.
+type authInfo struct {
+	root  bool     // root API_TOKEN → barcha kind'lar
+	kinds []string // scoped JWT token uchun ruxsat etilgan kind'lar
+}
+
+// allows token berilgan kind'ni yuborishga ruxsat beradimi.
+func (a *authInfo) allows(kind string) bool {
+	return a.root || slices.Contains(a.kinds, kind)
+}
+
+type ctxKey int
+
+const authCtxKey ctxKey = 0
+
+// auth token'ni tekshiruvchi middleware (task yuborish/o'qish uchun).
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !tokenMatches(r, s.cfg.APIToken) {
+		info, ok := s.authenticate(r)
+		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), authCtxKey, info)))
 	}
 }
 
-// authAny API yoki WORKER token'ini qabul qiladi (fayl endpoint'lari ikkala
-// tomon — tashqi client va worker — tomonidan ishlatiladi).
+// authAny API/JWT token yoki WORKER token'ini qabul qiladi (fayl endpoint'lari
+// ikkala tomon — tashqi client va worker — tomonidan ishlatiladi).
 func (s *Server) authAny(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !tokenMatches(r, s.cfg.APIToken) && !tokenMatches(r, s.cfg.WorkerToken) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
+		if _, ok := s.authenticate(r); ok {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		if tokenMatches(r, s.cfg.WorkerToken) {
+			next(w, r)
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "ruxsat yo'q"})
 	}
 }
 
-// tokenMatches Authorization: Bearer <token> yoki ?token= ni kutilgan token bilan solishtiradi.
-// Solishtirish constant-time (timing-attack'ning oldini oladi).
+// authenticate so'rov token'ini tekshiradi: root API_TOKEN yoki (yoqilgan bo'lsa)
+// scoped JWT token. Muvaffaqiyatda ruxsat etilgan kind'lar bilan authInfo qaytaradi.
+func (s *Server) authenticate(r *http.Request) (*authInfo, bool) {
+	tok := bearerToken(r)
+	if tok == "" {
+		return nil, false
+	}
+	if s.cfg.APIToken != "" && secureEqual(tok, s.cfg.APIToken) {
+		return &authInfo{root: true}, true
+	}
+	if s.tokens != nil {
+		if claims, err := s.tokens.Parse(tok); err == nil {
+			return &authInfo{kinds: claims.Kinds}, true
+		}
+	}
+	return nil, false
+}
+
+// authFromContext auth middleware saqlagan authInfo'ni qaytaradi.
+func authFromContext(ctx context.Context) *authInfo {
+	if info, ok := ctx.Value(authCtxKey).(*authInfo); ok {
+		return info
+	}
+	return &authInfo{} // hech narsaga ruxsat bermaydi (mudofaa)
+}
+
+// bearerToken Authorization: Bearer <token> yoki ?token= dan token'ni ajratib oladi.
+func bearerToken(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	return r.URL.Query().Get("token")
+}
+
+// tokenMatches so'rov token'ini kutilgan token bilan constant-time solishtiradi.
 func tokenMatches(r *http.Request, want string) bool {
 	if want == "" {
 		return false
 	}
-	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		if secureEqual(strings.TrimPrefix(h, "Bearer "), want) {
-			return true
-		}
-	}
-	return secureEqual(r.URL.Query().Get("token"), want)
+	return secureEqual(bearerToken(r), want)
 }
 
 // secureEqual ikki tokenni constant-time solishtiradi (uzunlik farqi tez rad etiladi).
@@ -123,12 +175,34 @@ type createTaskRequest struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// payloadKind payload envelope'idan task turini (kind) ajratib oladi (yo'q bo'lsa "").
+func payloadKind(payload json.RawMessage) string {
+	var env struct {
+		Kind string `json:"kind"`
+	}
+	json.Unmarshal(payload, &env)
+	return env.Kind
+}
+
 // handleCreateTask yangi task yaratib client'ga yuboradi (sync yoki async).
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	var req createTaskRequest
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "noto'g'ri JSON"})
+			return
+		}
+	}
+
+	// Scoped token bo'lsa: payload.kind ruxsat etilgan kind'lar ichida bo'lishi shart.
+	if info := authFromContext(r.Context()); !info.root {
+		kind := payloadKind(req.Payload)
+		if kind == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "payload.kind ko'rsatilishi shart"})
+			return
+		}
+		if !info.allows(kind) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "bu token '" + kind + "' kind uchun ruxsatga ega emas"})
 			return
 		}
 	}

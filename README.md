@@ -41,6 +41,8 @@ Sozlamalar (env):
 | `MAX_FILE_SIZE` | `104857600` (100 MiB) | Bitta fayl uchun maksimal hajm (bayt) |
 | `TASK_TTL` | `1h` | Yakunlangan task qancha saqlanadi (so'ng xotiradan o'chiriladi) |
 | `MAX_MESSAGE_SIZE` | `1048576` (1 MiB) | Worker'dan keladigan WS xabar uchun maksimal hajm (bayt) |
+| `TOKEN_SECRET` | — | Scoped JWT token'larni imzolash siri (bo'sh = o'chirilgan) |
+| `TOKEN_STORE` | `relay-tokens.json` | Token reyestri (JSON) fayl yo'li |
 
 > **Holat in-memory:** task'lar, ularning natijalari va yuklangan fayllar faqat
 > xotirada/diskda vaqtincha saqlanadi — server qayta ishga tushsa hammasi
@@ -102,6 +104,43 @@ curl -H "Authorization: Bearer secret" localhost:8080/clients
 
 Barcha task API so'rovlari `Authorization: Bearer <API_TOKEN>` talab qiladi.
 Worker WS ulanishi esa `?token=<WORKER_TOKEN>` orqali autentifikatsiya qilinadi.
+
+## Scoped token'lar (JWT, kind bo'yicha cheklangan)
+
+`API_TOKEN` — barcha kind'larga ruxsat beruvchi **root** token. Undan tashqari,
+faqat ma'lum **kind'larga** ruxsat beruvchi, **bekor qilinadigan** JWT token'lar
+chiqarish mumkin. Yoqish uchun `TOKEN_SECRET` o'rnatiladi.
+
+Token'lar `relay token` CLI orqali boshqariladi (server bilan bir xil
+`TOKEN_SECRET` va `TOKEN_STORE` kerak):
+
+```bash
+export TOKEN_SECRET=uzun-tasodifiy-sir
+export TOKEN_STORE=/var/lib/relay/tokens.json   # server bilan bir xil
+
+# faqat "http" kind'ga ruxsat beruvchi, 30 kun amal qiladigan token
+relay token create --kinds http --ttl 720h
+# → jti, kinds, expires va token (JWT) chop etiladi
+
+relay token list             # barcha token'lar (active/revoked/expired)
+relay token revoke <jti>     # token'ni bekor qilish (darhol kuchga kiradi)
+```
+
+So'rovda shu token ishlatiladi:
+
+```bash
+curl -H "Authorization: Bearer <JWT>" \
+  -d '{"payload":{"kind":"http","spec":{...}}}' localhost:8080/tasks
+```
+
+- `payload.kind` token ruxsatidagi kind'lardan bo'lishi shart — aks holda **403**.
+- Token bekor qilingan / muddati o'tgan / imzo noto'g'ri bo'lsa — **401**.
+- Root `API_TOKEN` esa kind tekshiruvidan o'tmaydi (hammasiga ruxsat).
+
+**Ishlash tartibi:** token amal qilishi uchun (1) imzo `TOKEN_SECRET` bilan
+to'g'ri, (2) muddati o'tmagan, (3) `jti` reyestrda mavjud va bekor qilinmagan
+bo'lishi kerak (*fail-closed* — reyestr yo'qolsa token ishlamaydi, shu bois
+revoke ishonchli). Reyestr diskda saqlanadi va restart'dan omon qoladi.
 
 ## API
 

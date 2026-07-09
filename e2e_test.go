@@ -35,7 +35,7 @@ func startTestServer(t *testing.T) (*httptest.Server, *Hub) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(cfg, hub, store, blobs)
+	srv := NewServer(cfg, hub, store, blobs, nil)
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)
 	return ts, hub
