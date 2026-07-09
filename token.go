@@ -22,6 +22,7 @@ type Claims struct {
 // metama'lumotni saqlaymiz — jti, kind'lar, muddat, revoke holati).
 type TokenRecord struct {
 	JTI     string    `json:"jti"`
+	Name    string    `json:"name,omitempty"`
 	Kinds   []string  `json:"kinds"`
 	Created time.Time `json:"created"`
 	Expires time.Time `json:"expires,omitempty"`
@@ -58,10 +59,10 @@ func NewTokenRegistry(path string, secret []byte) *TokenRegistry {
 }
 
 // Issue yangi token chiqaradi: JWT'ni imzolaydi va yozuvni registry'ga qo'shadi.
-// ttl 0 bo'lsa token muddatsiz.
-func (reg *TokenRegistry) Issue(kinds []string, ttl time.Duration) (string, TokenRecord, error) {
+// name — ixtiyoriy yorliq (kim/nima uchun). ttl 0 bo'lsa token muddatsiz.
+func (reg *TokenRegistry) Issue(name string, kinds []string, ttl time.Duration) (string, TokenRecord, error) {
 	now := time.Now()
-	rec := TokenRecord{JTI: uuid.NewString(), Kinds: kinds, Created: now}
+	rec := TokenRecord{JTI: uuid.NewString(), Name: name, Kinds: kinds, Created: now}
 
 	claims := Claims{
 		Kinds: kinds,

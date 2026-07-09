@@ -16,7 +16,7 @@ func newTestRegistry(t *testing.T) *TokenRegistry {
 
 func TestToken_IssueParseRoundTrip(t *testing.T) {
 	reg := newTestRegistry(t)
-	tok, rec, err := reg.Issue([]string{"http", "email"}, time.Hour)
+	tok, rec, err := reg.Issue("", []string{"http", "email"}, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,9 +29,25 @@ func TestToken_IssueParseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestToken_NamePersisted(t *testing.T) {
+	reg := newTestRegistry(t)
+	_, rec, err := reg.Issue("billing-service", []string{"http"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Name != "billing-service" {
+		t.Fatalf("Issue name'ni qaytarmadi: %+v", rec)
+	}
+	// reyestrdan (fayldan) qayta o'qilganda ham saqlanishi kerak
+	recs, _ := reg.List()
+	if len(recs) != 1 || recs[0].Name != "billing-service" {
+		t.Fatalf("name reyestrda saqlanmadi: %+v", recs)
+	}
+}
+
 func TestToken_RevokedRejected(t *testing.T) {
 	reg := newTestRegistry(t)
-	tok, rec, _ := reg.Issue([]string{"http"}, time.Hour)
+	tok, rec, _ := reg.Issue("", []string{"http"}, time.Hour)
 	if err := reg.Revoke(rec.JTI); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +58,7 @@ func TestToken_RevokedRejected(t *testing.T) {
 
 func TestToken_WrongSecretRejected(t *testing.T) {
 	reg := newTestRegistry(t)
-	tok, _, _ := reg.Issue([]string{"http"}, time.Hour)
+	tok, _, _ := reg.Issue("", []string{"http"}, time.Hour)
 	other := NewTokenRegistry(filepath.Join(t.TempDir(), "other.json"), []byte("boshqa-sir"))
 	if _, err := other.Parse(tok); err == nil {
 		t.Fatal("boshqa sir bilan imzo tekshiruvi o'tmasligi kerak")
@@ -51,7 +67,7 @@ func TestToken_WrongSecretRejected(t *testing.T) {
 
 func TestToken_NotInRegistryRejected(t *testing.T) {
 	reg := newTestRegistry(t)
-	tok, _, _ := reg.Issue([]string{"http"}, time.Hour)
+	tok, _, _ := reg.Issue("", []string{"http"}, time.Hour)
 	// bir xil sir, lekin bo'sh reyestr → imzo to'g'ri, ammo jti yo'q (fail-closed)
 	empty := NewTokenRegistry(filepath.Join(t.TempDir(), "empty.json"), []byte("testsecret"))
 	if _, err := empty.Parse(tok); err == nil {
@@ -61,7 +77,7 @@ func TestToken_NotInRegistryRejected(t *testing.T) {
 
 func TestToken_ExpiredRejected(t *testing.T) {
 	reg := newTestRegistry(t)
-	tok, _, _ := reg.Issue([]string{"http"}, 10*time.Millisecond)
+	tok, _, _ := reg.Issue("", []string{"http"}, 10*time.Millisecond)
 	time.Sleep(30 * time.Millisecond)
 	if _, err := reg.Parse(tok); err == nil {
 		t.Fatal("muddati o'tgan token qabul qilinmasligi kerak")
@@ -111,7 +127,7 @@ func postTask(t *testing.T, url, token, kind string) int {
 
 func TestE2E_ScopedTokenEnforcesKind(t *testing.T) {
 	ts, reg := startScopedServer(t)
-	tok, rec, _ := reg.Issue([]string{"http"}, time.Hour)
+	tok, rec, _ := reg.Issue("", []string{"http"}, time.Hour)
 
 	// ruxsat etilgan kind → 503 (worker yo'q, lekin auth+kind o'tdi — 401/403 emas)
 	if code := postTask(t, ts.URL, tok, "http"); code != http.StatusServiceUnavailable {

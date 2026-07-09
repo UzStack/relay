@@ -119,8 +119,9 @@ export TOKEN_SECRET=uzun-tasodifiy-sir
 export TOKEN_STORE=/var/lib/relay/tokens.json   # server bilan bir xil
 
 # faqat "http" kind'ga ruxsat beruvchi, 30 kun amal qiladigan token
-relay token create --kinds http --ttl 720h
-# → jti, kinds, expires va token (JWT) chop etiladi
+relay token create --name billing-service --kinds http --ttl 720h
+# → jti, name, kinds, expires va token (JWT) chop etiladi
+#   (--name ixtiyoriy yorliq: kim/nima uchun ekanini bildiradi)
 
 relay token list             # barcha token'lar (active/revoked/expired)
 relay token revoke <jti>     # token'ni bekor qilish (darhol kuchga kiradi)

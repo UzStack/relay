@@ -39,6 +39,7 @@ func tokenCLI(args []string) {
 
 func tokenCreate(reg *TokenRegistry, args []string) {
 	fs := flag.NewFlagSet("create", flag.ExitOnError)
+	name := fs.String("name", "", "token yorlig'i (kim/nima uchun, ixtiyoriy)")
 	kinds := fs.String("kinds", "", "vergul bilan ajratilgan ruxsat etilgan kind'lar (masalan: http,email)")
 	ttl := fs.Duration("ttl", 0, "amal qilish muddati (masalan 720h); 0 = muddatsiz")
 	fs.Parse(args)
@@ -48,11 +49,14 @@ func tokenCreate(reg *TokenRegistry, args []string) {
 		fatal("--kinds shart (masalan: --kinds http,email)")
 	}
 
-	token, rec, err := reg.Issue(kindList, *ttl)
+	token, rec, err := reg.Issue(strings.TrimSpace(*name), kindList, *ttl)
 	if err != nil {
 		fatal("token yaratish: %v", err)
 	}
 	fmt.Printf("jti:     %s\n", rec.JTI)
+	if rec.Name != "" {
+		fmt.Printf("name:    %s\n", rec.Name)
+	}
 	fmt.Printf("kinds:   %s\n", strings.Join(rec.Kinds, ","))
 	fmt.Printf("expires: %s\n\n", expStr(rec.Expires))
 	fmt.Printf("token (bir marta ko'rsatiladi):\n%s\n", token)
@@ -78,7 +82,7 @@ func tokenList(reg *TokenRegistry) {
 		return
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].Created.After(recs[j].Created) })
-	fmt.Printf("%-36s  %-20s  %-10s  %s\n", "JTI", "KINDS", "HOLAT", "MUDDAT")
+	fmt.Printf("%-36s  %-16s  %-16s  %-9s  %s\n", "JTI", "NAME", "KINDS", "HOLAT", "MUDDAT")
 	for _, r := range recs {
 		status := "active"
 		if r.Revoked {
@@ -86,14 +90,18 @@ func tokenList(reg *TokenRegistry) {
 		} else if !r.Expires.IsZero() && r.Expires.Before(time.Now()) {
 			status = "expired"
 		}
-		fmt.Printf("%-36s  %-20s  %-10s  %s\n", r.JTI, strings.Join(r.Kinds, ","), status, expStr(r.Expires))
+		name := r.Name
+		if name == "" {
+			name = "-"
+		}
+		fmt.Printf("%-36s  %-16s  %-16s  %-9s  %s\n", r.JTI, name, strings.Join(r.Kinds, ","), status, expStr(r.Expires))
 	}
 }
 
 func tokenUsage() {
 	fmt.Fprintln(os.Stderr, `foydalanish: relay token <command>
 
-  create --kinds http,email [--ttl 720h]   yangi scoped token yaratish
+  create --kinds http,email [--name X] [--ttl 720h]   yangi scoped token yaratish
   revoke <jti>                             token'ni bekor qilish
   list                                     token'lar ro'yxati
 
